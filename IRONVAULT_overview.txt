@@ -1,0 +1,14 @@
+IRONVAULT — Neutral Market Exploitation Engine
+
+Résumé :
+
+IRONVAULT est un bot de trading automatisé conçu pour exploiter simultanément deux inefficiences structurelles des marchés de prédiction : 
+1) les erreurs de pricing sur les marchés multi-issues (Multi-Outcome Dutching),
+2) les spreads récurrents générés par la fourniture de liquidité (Automated Market Making).
+
+Le bot fonctionne de manière entièrement déterministe, avec une séparation stricte du capital par stratégie afin d’éliminer tout conflit d’exposition. 
+Aucune décision discrétionnaire humaine n’intervient dans l’exécution des trades.
+
+IRONVAULT détecte, valide et exécute automatiquement les opportunités tout en appliquant des règles strictes de gestion du risque, de verrouillage du capital et de sécurité opérationnelle.
+
+L’interface graphique agit uniquement comme un tableau de contrôle (lancement, pause, arrêt d’urgence et suivi des états), tandis que toute la logique décisionnelle est confinée au backend afin de garantir stabilité, discipline et performance.

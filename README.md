@@ -1,0 +1,121 @@
+# IRONVAULT Trading Bot
+
+Bot de trading automatisé sécurisé avec interface graphique.
+
+## 🎯 Stratégies Supportées
+
+- **Strategy_A**: Multi-Outcome Dutching
+- **Strategy_B**: Automated Market Making
+
+## 🛡️ Priorités de Sécurité
+
+1. Isolation du capital
+2. Contrôle des risques
+3. Comportement déterministe
+4. Sécurité opérateur
+5. Utilisabilité
+
+## ✨ Fonctionnalités Clés
+
+- **Intégration Polymarket CLOB**: Exécution d'ordres rapide et directe via l'API CLOB.
+- **Données de Marché Gamma**: Flux de prix en temps réel pour une prise de décision précise.
+- **Interface PySide6**: Dashboard moderne et réactif pour le monitoring et le contrôle.
+- **Gestion Sécurisée des Credentials**: Clés API stockées en mémoire uniquement.
+
+
+## 📁 Structure du Projet
+
+```
+Ironvault/
+├── config/
+│   └── config.example.json    # Template de configuration
+├── backend/
+│   ├── config_loader.py       # Chargement/validation config
+│   ├── capital_manager.py     # Gestion pools de capital
+│   ├── policy_layer.py        # Validation des actions
+│   ├── orchestrator.py        # Coordination stratégies
+│   ├── execution_engine.py    # Exécution mécanique
+│   ├── kill_switch.py         # Arrêt d'urgence global
+│   ├── audit_logger.py        # Journalisation
+│   └── strategies/
+│       ├── base_strategy.py
+│       ├── strategy_a_dutching.py
+│       └── strategy_b_market_making.py
+├── frontend/
+│   ├── main_window.py         # Fenêtre principale
+│   ├── dashboard.py           # Tableau de bord
+│   ├── controls.py            # Boutons de contrôle
+│   └── styles.py              # Styles visuels
+├── main.py                    # Point d'entrée
+└── requirements.txt           # Dépendances
+```
+
+## 🚀 Installation
+
+```bash
+# Créer environnement virtuel
+python3 -m venv venv
+source venv/bin/activate  # macOS/Linux
+
+# Installer dépendances
+pip install -r requirements.txt
+```
+
+## ⚙️ Configuration
+
+1. Copier le template de configuration:
+```bash
+cp config/config.example.json config/config.json
+```
+
+2. Éditer `config/config.json` avec vos paramètres
+
+3. **Important**: La GUI ne peut pas modifier la configuration. Toute modification nécessite l'édition du fichier + redémarrage.
+
+## ▶️ Lancement
+
+```bash
+python main.py
+```
+
+## 🖥️ Interface
+
+### Tableau de Bord (Lecture Seule)
+- Capital total / verrouillé / disponible
+- Statut des stratégies A et B
+- Statut connexion marché
+- Indicateur kill switch
+
+### Contrôles (Limités)
+- **Charger Config**: Sélectionner fichier JSON
+- **Lancer**: Démarrer le bot (config requise)
+- **Pause**: Suspendre l'activité
+- **Reprendre**: Reprendre depuis pause
+- **Arrêt d'Urgence**: Déclenche kill switch (confirmation requise)
+
+## 🚨 Kill Switch
+
+Le kill switch se déclenche sur:
+- Commande opérateur manuelle
+- Dépassement seuil de perte
+- Violation de politique
+- Timeout heartbeat
+- Signal watchdog externe
+
+**Actions automatiques:**
+- Annulation tous ordres
+- Gel pools de capital
+- Désactivation stratégies
+- Nécessite redémarrage manuel
+
+## 📊 Logs
+
+Les logs d'audit sont enregistrés dans le dossier `logs/` avec horodatage.
+Format: `audit_YYYYMMDD_HHMMSS.log`
+
+## ⚠️ Règles de Sécurité
+
+- Aucune modification de paramètres depuis la GUI
+- Pas de saisie manuelle d'ordres
+- Pas de contournement des limites de risque
+- Pas de retry automatique sans approbation politique

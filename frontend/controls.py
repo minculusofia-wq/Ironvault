@@ -1,0 +1,166 @@
+"""
+Controls Module
+Strictly limited operator controls.
+"""
+
+from PySide6.QtWidgets import (
+    QWidget, QHBoxLayout, QVBoxLayout, QPushButton, 
+    QFileDialog, QMessageBox, QFrame
+)
+from PySide6.QtCore import Signal, Slot
+
+
+class ControlPanel(QFrame):
+    """
+    Operator control panel.
+    Actions strictly limited to:
+    - Load configuration file
+    - Manage credentials (create/unlock vault)
+    - Launch bot
+    - Pause / Resume
+    - Emergency stop (with confirmation)
+    """
+    
+    config_load_requested = Signal(str)
+    credentials_requested = Signal()
+    launch_requested = Signal()
+    pause_requested = Signal()
+    resume_requested = Signal()
+    emergency_stop_requested = Signal()
+    
+    def __init__(self):
+        super().__init__()
+        self._bot_state = "IDLE"
+        self._config_loaded = False
+        self._vault_unlocked = False
+        self._setup_ui()
+        self._update_button_states()
+    
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        top_row = QHBoxLayout()
+        
+        self._load_config_btn = QPushButton("📁 Charger Config")
+        self._load_config_btn.clicked.connect(self._on_load_config)
+        top_row.addWidget(self._load_config_btn)
+        
+        self._credentials_btn = QPushButton("🔐 Credentials")
+        self._credentials_btn.clicked.connect(self._on_credentials)
+        top_row.addWidget(self._credentials_btn)
+        
+        self._launch_btn = QPushButton("▶️ Lancer")
+        self._launch_btn.setProperty("class", "launch")
+        self._launch_btn.clicked.connect(self._on_launch)
+        top_row.addWidget(self._launch_btn)
+        
+        layout.addLayout(top_row)
+        
+        bottom_row = QHBoxLayout()
+        
+        self._pause_btn = QPushButton("⏸️ Pause")
+        self._pause_btn.setProperty("class", "pause")
+        self._pause_btn.clicked.connect(self._on_pause)
+        bottom_row.addWidget(self._pause_btn)
+        
+        self._resume_btn = QPushButton("▶️ Reprendre")
+        self._resume_btn.setProperty("class", "launch")
+        self._resume_btn.clicked.connect(self._on_resume)
+        bottom_row.addWidget(self._resume_btn)
+        
+        self._emergency_btn = QPushButton("🛑 ARRÊT D'URGENCE")
+        self._emergency_btn.setProperty("class", "danger")
+        self._emergency_btn.clicked.connect(self._on_emergency_stop)
+        bottom_row.addWidget(self._emergency_btn)
+        
+        layout.addLayout(bottom_row)
+    
+    def _on_load_config(self):
+        """Handle load config button click."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Sélectionner fichier de configuration",
+            "",
+            "JSON Files (*.json)"
+        )
+        if file_path:
+            self.config_load_requested.emit(file_path)
+    
+    def _on_credentials(self):
+        """Handle credentials button click."""
+        self.credentials_requested.emit()
+    
+    def _on_launch(self):
+        """Handle launch button click."""
+        self.launch_requested.emit()
+    
+    def _on_pause(self):
+        """Handle pause button click."""
+        self.pause_requested.emit()
+    
+    def _on_resume(self):
+        """Handle resume button click."""
+        self.resume_requested.emit()
+    
+    def _on_emergency_stop(self):
+        """Handle emergency stop with confirmation."""
+        reply = QMessageBox.warning(
+            self,
+            "⚠️ Confirmation Arrêt d'Urgence",
+            "Cette action va:\n\n"
+            "• Annuler tous les ordres en attente\n"
+            "• Geler tous les pools de capital\n"
+            "• Désactiver toutes les stratégies\n"
+            "• Nécessiter un redémarrage manuel\n\n"
+            "Êtes-vous sûr de vouloir continuer?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.emergency_stop_requested.emit()
+    
+    def _update_button_states(self):
+        """Update button enabled states based on current bot state."""
+        is_idle = self._bot_state == "IDLE"
+        is_running = self._bot_state == "RUNNING"
+        is_paused = self._bot_state == "PAUSED"
+        is_killed = self._bot_state == "KILLED"
+        
+        self._load_config_btn.setEnabled(is_idle)
+        self._credentials_btn.setEnabled(is_idle)
+        
+        # Launch requires config AND vault unlocked
+        self._launch_btn.setEnabled(is_idle and self._config_loaded and self._vault_unlocked)
+        
+        self._pause_btn.setEnabled(is_running)
+        
+        self._resume_btn.setEnabled(is_paused)
+        
+        self._emergency_btn.setEnabled(not is_killed and not is_idle)
+    
+    @Slot(str)
+    def set_bot_state(self, state: str):
+        """Update tracked bot state and refresh buttons."""
+        self._bot_state = state
+        self._update_button_states()
+    
+    @Slot(bool)
+    def set_config_loaded(self, loaded: bool):
+        """Update config loaded status and refresh buttons."""
+        self._config_loaded = loaded
+        self._update_button_states()
+    
+    @Slot(bool)
+    def set_vault_unlocked(self, unlocked: bool):
+        """Update vault status and refresh buttons."""
+        self._vault_unlocked = unlocked
+        if unlocked:
+            self._credentials_btn.setText("🔓 Vault Déverrouillé")
+            self._credentials_btn.setProperty("class", "launch")
+        else:
+            self._credentials_btn.setText("🔐 Credentials")
+            self._credentials_btn.setProperty("class", "")
+        self._credentials_btn.style().unpolish(self._credentials_btn)
+        self._credentials_btn.style().polish(self._credentials_btn)
+        self._update_button_states()

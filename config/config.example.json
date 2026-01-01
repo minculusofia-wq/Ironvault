@@ -1,0 +1,30 @@
+{
+  "capital": {
+    "total": 10000,
+    "max_allocation_strategy_a": 5000,
+    "max_allocation_strategy_b": 5000
+  },
+  "strategy_a": {
+    "enabled": true,
+    "name": "Multi-Outcome Dutching",
+    "max_events": 3,
+    "min_odds": 1.5,
+    "max_odds": 10.0
+  },
+  "strategy_b": {
+    "enabled": true,
+    "name": "Automated Market Making",
+    "spread_min": 0.01,
+    "spread_max": 0.05,
+    "max_exposure": 1000
+  },
+  "risk": {
+    "max_drawdown_percent": 10,
+    "max_daily_loss": 500,
+    "kill_switch_threshold": 15
+  },
+  "market": {
+    "connection_timeout_seconds": 30,
+    "heartbeat_interval_seconds": 5
+  }
+}
