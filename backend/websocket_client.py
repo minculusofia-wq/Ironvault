@@ -7,8 +7,10 @@ Maintains live OrderBook state via delta updates.
 import asyncio
 import json
 import logging
+import ssl
+import certifi
 import websockets
-from typing import Callable, Any, Dict
+from typing import Dict, Callable, Any
 
 from .audit_logger import AuditLogger
 
@@ -28,10 +30,13 @@ class WebSocketClient:
         # Callbacks: token_id -> function(snapshot)
         self._book_callbacks: Dict[str, list[Callable[[Any], None]]] = {}
         
+        # Setup SSL context for macOS
+        self._ssl_context = ssl.create_default_context(cafile=certifi.where())
+        
     async def connect(self):
         """Establish WebSocket connection."""
         try:
-            self._ws = await websockets.connect(self._url)
+            self._ws = await websockets.connect(self._url, ssl=self._ssl_context)
             self._running = True
             self._audit.log_system_event("WS_CONNECTED", {"url": self._url})
             asyncio.create_task(self._listen())

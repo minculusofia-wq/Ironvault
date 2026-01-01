@@ -32,6 +32,7 @@ class ControlPanel(QFrame):
         super().__init__()
         self._bot_state = "IDLE"
         self._config_loaded = False
+        self._paper_trading = False
         self._vault_unlocked = False
         self._setup_ui()
         self._update_button_states()
@@ -130,8 +131,9 @@ class ControlPanel(QFrame):
         self._load_config_btn.setEnabled(is_idle)
         self._credentials_btn.setEnabled(is_idle)
         
-        # Launch requires config AND vault unlocked
-        self._launch_btn.setEnabled(is_idle and self._config_loaded and self._vault_unlocked)
+        # Launch requires config AND (vault unlocked OR paper trading)
+        can_launch = is_idle and self._config_loaded and (self._vault_unlocked or self._paper_trading)
+        self._launch_btn.setEnabled(can_launch)
         
         self._pause_btn.setEnabled(is_running)
         
@@ -149,6 +151,12 @@ class ControlPanel(QFrame):
     def set_config_loaded(self, loaded: bool):
         """Update config loaded status and refresh buttons."""
         self._config_loaded = loaded
+        self._update_button_states()
+
+    @Slot(bool)
+    def set_paper_trading(self, active: bool):
+        """Update paper trading status and refresh buttons."""
+        self._paper_trading = active
         self._update_button_states()
     
     @Slot(bool)

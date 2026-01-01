@@ -184,6 +184,46 @@ class Orchestrator:
             self._audit.log_operator_action("BOT_LAUNCHED")
             return True, "Bot launched successfully"
 
+    def pause(self) -> tuple[bool, str]:
+        """Pause bot operations."""
+        with self._lock:
+            decision = self._policy.validate(ActionType.PAUSE_BOT)
+            if not decision.allowed:
+                return False, decision.reason
+            
+            self._set_state(BotState.PAUSED)
+            self._policy.set_bot_state("PAUSED")
+            self._audit.log_operator_action("BOT_PAUSED")
+            return True, "Bot mis en pause"
+
+    def resume(self) -> tuple[bool, str]:
+        """Resume bot operations."""
+        with self._lock:
+            decision = self._policy.validate(ActionType.RESUME_BOT)
+            if not decision.allowed:
+                return False, decision.reason
+            
+            self._set_state(BotState.RUNNING)
+            self._policy.set_bot_state("RUNNING")
+            self._audit.log_operator_action("BOT_RESUMED")
+            return True, "Bot a repris l'activité"
+
+    def emergency_stop(self) -> tuple[bool, str]:
+        """Trigger emergency stop."""
+        if self._kill_switch:
+            self._kill_switch.trigger(KillSwitchTrigger.OPERATOR_MANUAL, "Arrêt d'urgence opérateur")
+            return True, "Arrêt d'urgence déclenché"
+        return False, "Kill switch non initialisé"
+
+    def shutdown(self) -> None:
+        """Clean shutdown of application."""
+        self._stop_heartbeat()
+        if self._execution:
+            self._execution.disable()
+        if self._credentials:
+            self._credentials.lock_vault()
+        self._audit.log_operator_action("SYSTEM_SHUTDOWN")
+
     def _start_heartbeat(self) -> None:
         """Start heartbeat monitoring thread with AsyncIO loop."""
         self._heartbeat_running = True
@@ -205,28 +245,37 @@ class Orchestrator:
         
         # Connect WS Client if not connected
         if self._ws_client and not self._ws_client._running:
-            await self._ws_client.connect()
+            try:
+                await self._ws_client.connect()
+            except Exception as e:
+                self._audit.log_error("WS_CONNECT_RETRY_FAILED", str(e))
         
         # Enable Execution Engine here (in the loop)
         if self._execution and not self._execution.is_enabled:
-             self._execution.enable()
+             try:
+                 self._execution.enable()
+             except Exception as e:
+                 self._audit.log_error("EXECUTION_ENABLE_FAILED", str(e))
         
         while self._heartbeat_running:
-            await asyncio.sleep(interval)
-            
-            if self._state == BotState.RUNNING:
-                self._last_heartbeat = time.time()
+            try:
+                await asyncio.sleep(interval)
                 
-                # Run strategies concurrently
-                tasks = []
-                if self._strategy_a and self._strategy_a.is_active:
-                    tasks.append(self._strategy_a.process_tick())
-                
-                if self._strategy_b and self._strategy_b.is_active:
-                    tasks.append(self._strategy_b.process_tick())
+                if self._state == BotState.RUNNING:
+                    self._last_heartbeat = time.time()
                     
-                if tasks:
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                    # Run strategies concurrently
+                    tasks = []
+                    if self._strategy_a and self._strategy_a.is_active:
+                        tasks.append(self._strategy_a.process_tick())
+                    
+                    if self._strategy_b and self._strategy_b.is_active:
+                        tasks.append(self._strategy_b.process_tick())
+                        
+                    if tasks:
+                        await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception as e:
+                self._audit.log_error("HEARTBEAT_LOOP_TICK_ERROR", str(e))
         
         # Cleanup when loop stops
         if self._ws_client:

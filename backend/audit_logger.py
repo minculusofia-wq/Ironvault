@@ -110,6 +110,14 @@ class AuditLogger:
             "trigger": trigger,
             **(details or {})
         })
+
+    def log_error(self, action: str, message: str) -> None:
+        """Log a system error."""
+        self.log(EventType.SYSTEM_ERROR, action, {"message": message})
+    
+    def log_system_event(self, action: str, details: dict[str, Any] | None = None) -> None:
+        """Log a system-level event."""
+        self.log(EventType.OPERATOR_ACTION, action, details)
     
     @property
     def log_file_path(self) -> str:

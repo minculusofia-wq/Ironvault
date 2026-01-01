@@ -112,41 +112,6 @@ class StrategyBMarketMaking(BaseStrategy):
         """
         if self._state != StrategyState.ACTIVE:
             return
-        
-    async def activate(self) -> bool:
-        """
-        Activate and subscribe to markets.
-        """
-        # Call base activate logic manually since we overrode it
-        if not self._config.enabled:
-            return False
-            
-        if self._state != StrategyState.INACTIVE:
-            return False
-            
-        self._set_state(StrategyState.ACTIVATING, "ACTIVATING")
-        
-        # Lock Capital
-        max_exposure = self._config.max_exposure
-        if not self._capital.lock_for_strategy_b(max_exposure):
-            self._set_error("Failed to lock capital for max exposure")
-            return False
-            
-        self._locked_capital = max_exposure
-        self._clear_error()
-        self._set_state(StrategyState.ACTIVE, "ACTIVE")
-        
-        # Subscribe to markets (Assuming config has a list of target_asset_ids or we fallback to discovery)
-        # For this implementation, we'll assume we want to quote on a specific set if defined, 
-        # or we scan for them. Since scan is complex, we'll assume a fixed list for now or empty.
-        # IF config has 'target_token_ids', use it. Else, we wait for something else to trigger it.
-        # Let's assume we want to just test with one hardcoded market or a config field 
-        # that we added (or will add). 
-        # For safety: We'll subscribe if we have active quotes from a previous run or discovery.
-        
-        # Demo: Log that we are ready to subscribe
-        self._audit.log_strategy_event(self._name, "ACTIVATED_WAITING_FOR_TARGETS")
-        return True
 
     def _on_book_update(self, data: dict):
         """Callback for WS updates."""

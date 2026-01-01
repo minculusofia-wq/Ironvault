@@ -84,10 +84,12 @@ class MainWindow(QMainWindow):
         success, message = self._orchestrator.load_config(file_path)
         
         if success:
+            # Force immediate sync of the control panel
             self._controls.set_config_loaded(True)
             self._dashboard.system_panel.update_config(file_path)
             
-            self._status_bar.showMessage(f"✓ {message}")
+            self._status_bar.showMessage(f"✓ Configuration chargée: {file_path.split('/')[-1]}")
+            # Trigger full UI update to refresh button enabled states
             self._update_ui()
         else:
             QMessageBox.critical(
@@ -95,7 +97,8 @@ class MainWindow(QMainWindow):
                 "Erreur de Configuration",
                 f"Impossible de charger la configuration:\n\n{message}"
             )
-            self._status_bar.showMessage(f"✗ Échec chargement config")
+            self._status_bar.showMessage(f"✗ Échec chargement config: {message}")
+            self._controls.set_config_loaded(False)
     
     @Slot()
     def _on_credentials(self):
@@ -156,9 +159,11 @@ class MainWindow(QMainWindow):
         success, message = creds.unlock_vault(password)
         
         if success:
+            # Force immediate sync
             self._controls.set_vault_unlocked(True)
             self._dashboard.system_panel.update_vault_status(True)
-            self._status_bar.showMessage("✓ Vault déverrouillé")
+            self._status_bar.showMessage("✓ Vault déverrouillé avec succès")
+            self._update_ui()
         else:
             if message == "VAULT_CORRUPTED":
                 # Trigger kill switch for corrupted vault
@@ -171,8 +176,9 @@ class MainWindow(QMainWindow):
                     "Supprimez le vault et recréez-le."
                 )
             else:
-                QMessageBox.warning(self, "Échec Déverrouillage", message)
-                self._status_bar.showMessage(f"✗ {message}")
+                QMessageBox.warning(self, "Échec Déverrouillage", f"Mot de passe incorrect ou erreur: {message}")
+                self._status_bar.showMessage(f"✗ Échec déverrouillage: {message}")
+                self._controls.set_vault_unlocked(False)
     
     @Slot()
     def _on_launch(self):
@@ -205,12 +211,11 @@ class MainWindow(QMainWindow):
     
     def _on_bot_state_changed(self, state: BotState):
         """Handle bot state change from orchestrator."""
-        self._controls.set_bot_state(state.value)
-        self._dashboard.system_panel.update_bot_state(state.value)
+        # We don't update UI directly here to avoid thread safety issues
+        # since this callback might come from the orchestrator's heartbeat thread.
+        # The periodic _update_ui timer will pick up state changes.
         
         if state == BotState.KILLED:
-            # Update vault status - credentials destroyed
-            self._controls.set_vault_unlocked(False)
             self._dashboard.system_panel.update_vault_status(False)
             
             QMessageBox.critical(
@@ -226,6 +231,28 @@ class MainWindow(QMainWindow):
     @Slot()
     def _update_ui(self):
         """Periodic UI update from orchestrator state."""
+        # 1. Update Global Bot State
+        current_state = self._orchestrator.state
+        self._controls.set_bot_state(current_state.value)
+        self._dashboard.system_panel.update_bot_state(current_state.value)
+
+        # 2. Update Configuration Status
+        is_config_loaded = self._orchestrator.is_config_loaded
+        self._controls.set_config_loaded(is_config_loaded)
+        
+        if is_config_loaded:
+            is_paper = self._orchestrator._config.market.paper_trading
+            self._controls.set_paper_trading(is_paper)
+        else:
+            self._controls.set_paper_trading(False)
+
+        # 3. Update Vault/Credentials Status
+        creds_status = self._orchestrator.credentials_status
+        is_unlocked = creds_status.vault_loaded
+        self._controls.set_vault_unlocked(is_unlocked)
+        self._dashboard.system_panel.update_vault_status(is_unlocked)
+
+        # 4. Update Capital & Strategy Status
         capital = self._orchestrator.capital_state
         if capital:
             self._dashboard.capital_panel.update_capital(
@@ -256,10 +283,6 @@ class MainWindow(QMainWindow):
         ks_status = self._orchestrator.kill_switch_status
         if ks_status:
             self._dashboard.system_panel.update_kill_switch(ks_status["active"])
-        
-        # Update vault status
-        creds_status = self._orchestrator.credentials_status
-        self._dashboard.system_panel.update_vault_status(creds_status.vault_loaded)
     
 
 

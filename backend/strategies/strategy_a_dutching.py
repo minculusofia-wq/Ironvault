@@ -58,6 +58,10 @@ class StrategyADutching(BaseStrategy):
         
         self._audit.log_strategy_event(self._name, "ACTIVATION_STARTED")
         
+        # Lock a token amount for visibility in Dashboard
+        if self._capital.lock_for_strategy_a(1.0):
+            self._locked_capital = 1.0
+            
         self._clear_error()
         self._set_state(StrategyState.ACTIVE, "ACTIVE")
         

@@ -214,6 +214,10 @@ class CapitalManager:
         """Available (unallocated) capital."""
         return self._total - self._locked_a - self._locked_b
     
+    def get_available_capital(self) -> float:
+        """Helper for strategies to check their available allocation."""
+        return self.free
+
     @property
     def state(self) -> CapitalState:
         """Current state of all pools."""

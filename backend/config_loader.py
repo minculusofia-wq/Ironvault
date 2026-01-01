@@ -164,12 +164,22 @@ class ConfigLoader:
     
     def _build_config(self, data: dict[str, Any], file_path: str) -> BotConfig:
         """Build typed configuration object from validated data."""
+        market_data = data['market']
+        market_config = MarketConfig(
+            connection_timeout_seconds=market_data.get('connection_timeout_seconds', 30),
+            heartbeat_interval_seconds=market_data.get('heartbeat_interval_seconds', 5),
+            rpc_url=market_data.get('rpc_url', "https://polygon-rpc.com"),
+            clob_api_url=market_data.get('clob_api_url', "https://clob.polymarket.com/"),
+            gamma_api_url=market_data.get('gamma_api_url', "https://gamma-api.polymarket.com/"),
+            paper_trading=market_data.get('paper_trading', False)
+        )
+        
         return BotConfig(
             capital=CapitalConfig(**data['capital']),
             strategy_a=StrategyAConfig(**data['strategy_a']),
             strategy_b=StrategyBConfig(**data['strategy_b']),
             risk=RiskConfig(**data['risk']),
-            market=MarketConfig(**data['market']),
+            market=market_config,
             file_path=file_path
         )
     
