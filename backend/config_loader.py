@@ -55,6 +55,7 @@ class MarketConfig:
     rpc_url: str = "https://polygon-rpc.com"  # Default public RPC
     clob_api_url: str = "https://clob.polymarket.com/"
     gamma_api_url: str = "https://gamma-api.polymarket.com/"
+    paper_trading: bool = False
 
 
 @dataclass
@@ -80,7 +81,7 @@ class ConfigLoader:
         'strategy_a': ['enabled', 'name', 'max_events', 'min_odds', 'max_odds', 'trade_size_percent'],
         'strategy_b': ['enabled', 'name', 'spread_min', 'spread_max', 'max_exposure', 'trade_size_percent'],
         'risk': ['max_drawdown_percent', 'max_daily_loss', 'kill_switch_threshold'],
-        'market': ['connection_timeout_seconds', 'heartbeat_interval_seconds']
+        'market': ['connection_timeout_seconds', 'heartbeat_interval_seconds', 'paper_trading']
     }
     
     def __init__(self):

@@ -9,14 +9,16 @@
     "name": "Multi-Outcome Dutching",
     "max_events": 3,
     "min_odds": 1.5,
-    "max_odds": 10.0
+    "max_odds": 10.0,
+    "trade_size_percent": 1.0
   },
   "strategy_b": {
     "enabled": true,
     "name": "Automated Market Making",
     "spread_min": 0.01,
     "spread_max": 0.05,
-    "max_exposure": 1000
+    "max_exposure": 1000,
+    "trade_size_percent": 1.0
   },
   "risk": {
     "max_drawdown_percent": 10,
@@ -25,6 +27,7 @@
   },
   "market": {
     "connection_timeout_seconds": 30,
-    "heartbeat_interval_seconds": 5
+    "heartbeat_interval_seconds": 5,
+    "paper_trading": true
   }
 }

@@ -65,9 +65,9 @@ class BaseStrategy(ABC):
         pass
     
     @abstractmethod
-    def process_tick(self) -> None:
+    async def process_tick(self) -> None:
         """
-        Process a market tick.
+        Process a market tick (Async).
         Called by orchestrator on each market update.
         """
         pass

@@ -1,18 +1,19 @@
 """
-Execution Engine Module
-Receives validated orders and executes mechanically without discretion.
-No retry logic without policy approval.
+ExecutionEngine Module (Async)
+Executor that runs a background async task to process the order queue.
+Wraps synchronous CLOB client calls in a thread executor to prevent blocking.
 """
 
 from enum import Enum
 from dataclasses import dataclass
 from typing import Callable
-import threading
+import asyncio
 import time
 
 from .audit_logger import AuditLogger
+from .rate_limiter import RateLimiter
 from py_clob_client.client import ClobClient, ApiCreds
-from py_clob_client.clob_types import OrderArgs, OrderType as ClobOrderType
+from py_clob_client.clob_types import OrderArgs
 
 # Import for type hint only - avoid circular import
 from typing import TYPE_CHECKING
@@ -42,49 +43,59 @@ class Order:
 
 class ExecutionEngine:
     """
-    Mechanical order execution engine.
-    Executes validated orders without discretion.
+    Async Execution Engine.
+    Processes orders from a queue asynchronously.
     """
     
     def __init__(self, audit_logger: AuditLogger):
         self._audit = audit_logger
         self._orders: dict[str, Order] = {}
+        self._order_queue: asyncio.Queue = asyncio.Queue()
         self._order_counter = 0
-        self._lock = threading.Lock()
         self._enabled = False
         self._credentials: "CredentialsManager | None" = None
         self._clob_client: ClobClient | None = None
+        
+        # Rate Limiter (10 req/s burst 20)
+        self._rate_limiter = RateLimiter(max_tokens=20, refill_rate=10)
         
         # API Config Defaults 
         self._host = "https://clob.polymarket.com"
         self._chain_id = 137  # Polygon Mainnet
         
         self._status_callbacks: list[Callable[[Order], None]] = []
+        self._processing_task: asyncio.Task | None = None
     
-    def configure_api(self, host: str, chain_id: int = 137):
+    def configure_api(self, host: str, chain_id: int = 137, paper_trading: bool = False):
         """Configure CLOB API connection settings."""
         self._host = host
         self._chain_id = chain_id
+        self._paper_trading = paper_trading
     
     def set_credentials(self, credentials_manager: "CredentialsManager") -> None:
-        """
-        Set credentials manager for order execution.
-        Credentials values are NEVER logged.
-        """
+        """Set credentials manager."""
         self._credentials = credentials_manager
         self._audit.log_operator_action("CREDENTIALS_PROVIDED_TO_ENGINE", {
             "has_credentials": credentials_manager.is_unlocked
         })
     
     def enable(self) -> None:
-        """Enable the execution engine and initialize client."""
-        with self._lock:
-            self._enabled = True
-            self._init_client()
-            self._audit.log_operator_action("EXECUTION_ENGINE_ENABLED")
+        """Enable engine and start processing loop."""
+        if self._enabled:
+            return
+            
+        self._enabled = True
+        self._init_client()
+        # Start the background processor
+        self._processing_task = asyncio.create_task(self._process_queue())
+        self._audit.log_operator_action("EXECUTION_ENGINE_ENABLED")
             
     def _init_client(self):
-        """Initialize CLOB client if credentials available."""
+        """Initialize CLOB client (Sync) - to be used in executor."""
+        if getattr(self, '_paper_trading', False):
+             self._audit.log_system_event("EXECUTION_ENGINE_INIT", {"mode": "PAPER_TRADING"})
+             return
+
         if not self._credentials or not self._credentials.is_unlocked:
             return
 
@@ -95,7 +106,7 @@ class ExecutionEngine:
 
             self._clob_client = ClobClient(
                 host=self._host,
-                key=creds['api_private_key'],  # Wallet private key
+                key=creds['api_private_key'],
                 chain_id=self._chain_id,
                 creds=ApiCreds(
                     api_key=creds['api_key'],
@@ -109,182 +120,171 @@ class ExecutionEngine:
             self._clob_client = None
     
     def disable(self) -> None:
-        """Disable the execution engine."""
-        with self._lock:
-            self._enabled = False
-            self._clob_client = None # Clear sensitive client
-            self._audit.log_operator_action("EXECUTION_ENGINE_DISABLED")
+        """Disable engine and stop processing."""
+        self._enabled = False
+        if self._processing_task:
+            self._processing_task.cancel()
+            self._processing_task = None
+        self._clob_client = None
+        self._audit.log_operator_action("EXECUTION_ENGINE_DISABLED")
     
     def submit_order(self, strategy: str, order_type: str, params: dict) -> str | None:
         """
-        Submit an order for execution.
-        Returns order_id if accepted, None if engine disabled.
+        Submit an order.
+        Adds to async queue for processing.
         """
-        with self._lock:
-            if not self._enabled:
-                self._audit.log_policy_violation(
-                    "SUBMIT_ORDER",
-                    "Execution engine is disabled"
-                )
-                return None
-            
-            self._order_counter += 1
-            order_id = f"ORD-{self._order_counter:06d}"
-            
-            order = Order(
-                order_id=order_id,
-                strategy=strategy,
-                order_type=order_type,
-                params=params,
-                status=OrderStatus.PENDING
-            )
-            
-            self._orders[order_id] = order
-            
-            self._audit.log_strategy_event(strategy, "ORDER_SUBMITTED", {
-                "order_id": order_id,
-                "order_type": order_type,
-                "params": params
-            })
-            
-            return order_id
-    
-    def execute_order(self, order_id: str) -> bool:
-        """
-        Execute a pending order.
-        Returns True if execution started, False otherwise.
-        """
-        with self._lock:
-            if not self._enabled:
-                return False
-            
-            order = self._orders.get(order_id)
-            if not order:
-                return False
-            
-            if order.status != OrderStatus.PENDING:
-                return False
-            
-            order.status = OrderStatus.EXECUTING
+        if not self._enabled:
+            self._audit.log_policy_violation("SUBMIT_ORDER", "Execution engine is disabled")
+            return None
         
-        self._audit.log_strategy_event(order.strategy, "ORDER_EXECUTING", {
-            "order_id": order_id
+        self._order_counter += 1
+        order_id = f"ORD-{self._order_counter:06d}"
+        
+        order = Order(
+            order_id=order_id,
+            strategy=strategy,
+            order_type=order_type,
+            params=params,
+            status=OrderStatus.PENDING
+        )
+        
+        self._orders[order_id] = order
+        # Put in queue (nowait because we are likely in sync context calling this, or async)
+        # However, submit_order is called by sync strategies currently. 
+        # We need a way to put into the loop from sync land if strategy is sync.
+        # But we plan to make strategies async. For now, assuming calling from async context
+        # or we use loop.call_soon_threadsafe if called from thread.
+        # As we are redesigning everything to async, we assume callers can await or we use put_nowait.
+        try:
+            self._order_queue.put_nowait(order_id)
+        except asyncio.QueueFull:
+            self._audit.log_error("QUEUE_FULL", "Order queue is full")
+            return None
+        
+        self._audit.log_strategy_event(strategy, "ORDER_SUBMITTED", {
+            "order_id": order_id,
+            "order_type": order_type
         })
         
-        # Execute order using credentials (values never logged)
-        # In real implementation: use self._credentials.get_wallet_private_key()
-        # and self._credentials.get_polymarket_credentials() for API calls
-        execution_success = True
-        execution_success = True
-        
-        # Real Execution Logic
-        if self._clob_client:
+        return order_id
+    
+    async def _process_queue(self):
+        """Background loop to process orders."""
+        while self._enabled:
             try:
-                # Retrieve parameters
-                token_id = order.params.get('token_id')
-                price = order.params.get('price')
-                size = order.params.get('size')
-                side_str = order.params.get('side', 'BUY').upper()
-                side = "BUY" if side_str == "BUY" else "SELL"
+                order_id = await self._order_queue.get()
+                await self._execute_order(order_id)
+                self._order_queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self._audit.log_error("QUEUE_PROCESS_ERROR", str(e))
+                await asyncio.sleep(1) # Backoff
+    
+    async def _execute_order(self, order_id: str) -> bool:
+        """
+        Execute order (Async wrapper).
+        """
+        order = self._orders.get(order_id)
+        if not order:
+            return False
+            
+        if order.status != OrderStatus.PENDING:
+            return False
+        
+        order.status = OrderStatus.EXECUTING
+        self._audit.log_strategy_event(order.strategy, "ORDER_EXECUTING", {"order_id": order_id})
+        
+        loop = asyncio.get_running_loop()
+        execution_success = False
+        result_data = {}
+        
+        if getattr(self, '_paper_trading', False):
+             # PAPER TRADING SIMULATION
+             # We assume immediate fill for now or we could use clob_adapter to check if fills are possible
+             try:
+                 # Simulate network delay
+                 await asyncio.sleep(0.1) 
+                 result_data = {'clob_response': 'PAPER_TRADE_FILLED', 'simulated': True}
+                 execution_success = True
+                 self._audit.log_strategy_event(order.strategy, "PAPER_TRADE_EXECUTED", {"order_id": order_id, "params": order.params})
+             except Exception as e:
+                 execution_success = False
+                 result_data = {'error': str(e)}
+
+        elif self._clob_client:
+            try:
+                # Rate Limit Check
+                await self._rate_limiter.acquire()
                 
-                # Construct OrderArgs
-                # Note: This implies params dict MUST match expected fields
-                order_args = OrderArgs(
-                    price=float(price),
-                    size=float(size),
-                    side=side,
-                    token_id=token_id
-                )
-                
-                # Execute
-                resp = self._clob_client.create_and_post_order(order_args)
-                
-                # If we get here, submission was successful
-                order.result = {'clob_response': str(resp)}
-                
+                # Run blocking CLOB call in executor
+                resp = await loop.run_in_executor(None, self._send_clob_order, order)
+                result_data = {'clob_response': str(resp)}
+                execution_success = True
             except Exception as e:
                 execution_success = False
-                order.result = {'error': str(e)}
+                result_data = {'error': str(e)}
                 self._audit.log_error("EXECUTION_FAILED", f"Order {order_id}: {str(e)}")
-        
         else:
-            # Fallback/Simulation if no client (e.g. testing)
-            if self._credentials and self._credentials.is_unlocked:
-                 # Logic for when we have creds but maybe client failed init? 
-                 # Or treat as simulation mode.
-                 pass
-            else:
-                execution_success = False
-                order.result = {'error': 'No credentials/client active'}
-        
-        with self._lock:
-            order.status = OrderStatus.COMPLETED if execution_success else OrderStatus.FAILED
-            order.result = {"executed": execution_success, "timestamp": time.time()}
+             result_data = {'error': 'No active CLOB client'}
+             execution_success = False
+             
+        order.status = OrderStatus.COMPLETED if execution_success else OrderStatus.FAILED
+        order.result = result_data
+        order.result["timestamp"] = time.time()
         
         self._audit.log_strategy_event(order.strategy, "ORDER_COMPLETED", {
-            "order_id": order_id,
+            "order_id": order_id, 
             "result": order.result
         })
         
         self._notify_status(order)
         return True
+
+    def _send_clob_order(self, order: Order):
+        """Sync function to be run in executor."""
+        if not self._clob_client:
+            raise Exception("Client not initialized")
+            
+        token_id = order.params.get('token_id')
+        price = float(order.params.get('price'))
+        size = float(order.params.get('size'))
+        side = "BUY" if order.params.get('side', 'BUY').upper() == "BUY" else "SELL"
+        
+        order_args = OrderArgs(
+            price=price,
+            size=size,
+            side=side,
+            token_id=token_id
+        )
+        return self._clob_client.create_and_post_order(order_args)
     
     def cancel_order(self, order_id: str) -> bool:
-        """
-        Cancel a pending order.
-        Returns True if cancelled, False if not found or not cancellable.
-        """
-        with self._lock:
-            order = self._orders.get(order_id)
-            if not order:
-                return False
-            
-            if order.status not in [OrderStatus.PENDING, OrderStatus.EXECUTING]:
-                return False
-            
+        """Cancel order (stub for now)."""
+        # In async world, we'd add a cancellation task or flag.
+        order = self._orders.get(order_id)
+        if order and order.status in [OrderStatus.PENDING, OrderStatus.EXECUTING]:
             order.status = OrderStatus.CANCELLED
-            
-            self._audit.log_strategy_event(order.strategy, "ORDER_CANCELLED", {
-                "order_id": order_id
-            })
-            
-            self._notify_status(order)
+            self._audit.log_strategy_event(order.strategy, "ORDER_CANCELLED", {"order_id": order_id})
             return True
-    
+        return False
+
     def cancel_all_orders(self) -> int:
-        """
-        Cancel all pending and executing orders.
-        Returns count of cancelled orders.
-        """
+        """Cancel all."""
         cancelled = 0
-        with self._lock:
-            for order in self._orders.values():
-                if order.status in [OrderStatus.PENDING, OrderStatus.EXECUTING]:
-                    order.status = OrderStatus.CANCELLED
-                    cancelled += 1
-        
-        if cancelled > 0:
-            self._audit.log_operator_action("CANCEL_ALL_ORDERS", {
-                "cancelled_count": cancelled
-            })
-        
+        for order in self._orders.values():
+            if order.status in [OrderStatus.PENDING, OrderStatus.EXECUTING]:
+                order.status = OrderStatus.CANCELLED
+                cancelled += 1
         return cancelled
-    
+
     def get_order(self, order_id: str) -> Order | None:
-        """Get order by ID."""
         return self._orders.get(order_id)
-    
-    def get_pending_orders(self) -> list[Order]:
-        """Get all pending orders."""
-        with self._lock:
-            return [o for o in self._orders.values() if o.status == OrderStatus.PENDING]
-    
+        
     def subscribe_status(self, callback: Callable[[Order], None]) -> None:
-        """Subscribe to order status updates."""
         self._status_callbacks.append(callback)
     
     def _notify_status(self, order: Order) -> None:
-        """Notify subscribers of order status change."""
         for callback in self._status_callbacks:
             try:
                 callback(order)
@@ -293,11 +293,8 @@ class ExecutionEngine:
     
     @property
     def is_enabled(self) -> bool:
-        """Whether engine is enabled."""
         return self._enabled
     
     @property
     def pending_count(self) -> int:
-        """Count of pending orders."""
-        with self._lock:
-            return sum(1 for o in self._orders.values() if o.status == OrderStatus.PENDING)
+        return sum(1 for o in self._orders.values() if o.status == OrderStatus.PENDING)

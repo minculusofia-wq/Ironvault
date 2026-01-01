@@ -13,7 +13,7 @@ Responsibilities:
 - Compute max executable size given a slippage tolerance.
 """
 
-import requests
+import aiohttp
 from dataclasses import dataclass
 from typing import List, Dict, Optional, Tuple
 from decimal import Decimal
@@ -64,26 +64,31 @@ class MarketSnapshot:
 
 class ClobAdapter:
     """
-    Deterministic CLOB Analysis Adapter.
+    Deterministic CLOB Analysis Adapter (Async).
     """
     
     def __init__(self, clob_api_url: str = "https://clob.polymarket.com/"):
         self._base_url = clob_api_url.rstrip('/')
-        self._session = requests.Session()
+        self._session: aiohttp.ClientSession | None = None
     
-    def get_orderbook(self, token_id: str) -> Optional[MarketSnapshot]:
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def get_orderbook(self, token_id: str) -> Optional[MarketSnapshot]:
         """
-        Fetch L2 Order Book snapshot.
+        Fetch L2 Order Book snapshot (Async).
         GET /book?token_id=...
         """
         try:
+            session = await self._get_session()
             url = f"{self._base_url}/book"
             params = {"token_id": token_id}
             
-            # Using requests for synchronous, blocking, deterministic call
-            response = self._session.get(url, params=params, timeout=5)
-            response.raise_for_status()
-            data = response.json()
+            async with session.get(url, params=params, timeout=5) as response:
+                response.raise_for_status()
+                data = await response.json()
             
             # Polymarket API returns dictionary with "bids" and "asks"
             # Each level is usually {"price": "...", "size": "..."}
@@ -119,7 +124,7 @@ class ClobAdapter:
                 asks=asks
             )
             
-        except requests.RequestException as e:
+        except Exception as e:
             # In a production system we would log logic errors here
             print(f"[ClobAdapter] Error fetching book: {e}")
             return None

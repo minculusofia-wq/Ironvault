@@ -30,6 +30,7 @@
     "heartbeat_interval_seconds": 5,
     "rpc_url": "https://polygon-mainnet.g.alchemy.com/v2/kRJcIKMSOogm_STxgj4tL",
     "clob_api_url": "https://clob.polymarket.com/",
-    "gamma_api_url": "https://gamma-api.polymarket.com/"
+    "gamma_api_url": "https://gamma-api.polymarket.com/",
+    "paper_trading": false
   }
 }

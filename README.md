@@ -18,6 +18,7 @@ Bot de trading automatisé sécurisé avec interface graphique.
 ## ✨ Fonctionnalités Clés
 
 - **Intégration Polymarket CLOB**: Exécution d'ordres rapide et directe via l'API CLOB.
+- **Support Paper Trading**: Mode simulation sans risque avec `config_paper.json`.
 - **Données de Marché Gamma**: Flux de prix en temps réel pour une prise de décision précise.
 - **Interface PySide6**: Dashboard moderne et réactif pour le monitoring et le contrôle.
 - **Gestion Sécurisée des Credentials**: Clés API stockées en mémoire uniquement.
@@ -74,7 +75,21 @@ cp config/config.example.json config/config.json
 
 ## ▶️ Lancement
 
+### Mode Paper Trading (Simulation)
+Idéal pour tester les stratégies sans risque.
+1. Lancer l'application : `python main.py` ou `./Start_Bot.command`
+2. Charger `config/config_paper.json`
+3. (Optionnel) Déverrouiller le vault (non requis pour le paper trading)
+4. Cliquer sur **Lancer**
+
+### Mode Réel
+1. Lancer l'application
+2. Charger `config/config.json` (avec vos clés API)
+3. Déverrouiller le vault pour charger les credentials en mémoire
+4. Cliquer sur **Lancer**
+
 ```bash
+# Pour lancer via terminal
 python main.py
 ```
 
@@ -108,10 +123,17 @@ Le kill switch se déclenche sur:
 - Désactivation stratégies
 - Nécessite redémarrage manuel
 
-## 📊 Logs
+## 📊 Logs et Analyse
 
 Les logs d'audit sont enregistrés dans le dossier `logs/` avec horodatage.
 Format: `audit_YYYYMMDD_HHMMSS.log`
+
+### Analyse des Performances (Paper Trading)
+Utilisez le script inclus pour analyser vos sessions de paper trading :
+```bash
+python3 analyze_logs.py
+```
+Cela affichera un résumé des trades simulés et du volume estimé.
 
 ## ⚠️ Règles de Sécurité
 

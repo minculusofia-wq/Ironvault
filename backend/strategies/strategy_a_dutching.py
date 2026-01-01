@@ -90,9 +90,9 @@ class StrategyADutching(BaseStrategy):
         
         return True
     
-    def process_tick(self) -> None:
+    async def process_tick(self) -> None:
         """
-        Process market tick.
+        Process market tick (Async).
         Scan for dutching opportunities using Gamma and CLOB adapter.
         """
         if self._state != StrategyState.ACTIVE:
@@ -104,7 +104,7 @@ class StrategyADutching(BaseStrategy):
         
         try:
             # 1. Scan for Events via Gamma API
-            events = self._market_data.get_events(limit=5)
+            events = await self._market_data.get_events(limit=5)
             
             for event in events:
                 # Basic filter
@@ -114,15 +114,10 @@ class StrategyADutching(BaseStrategy):
                 # 2. Analyze Order Book for each Market in Event
                 markets = event.get('markets', [])
                 for market in markets:
-                     token_id = market.get('id') # or condition_id depending on structure
-                     # Polymarket Gamma API returns specific structure, simplifying for this step
-                     # Assuming market['id'] is usable token_id for CLOB (often need mapping condition_id -> token_id)
-                     # For this implementation we assume market['token_id'] exists or is derivable.
-                     # If not, would need lookup. Using market['clobTokenIds'][0] if available or similar.
+                     token_id = market.get('id')
                      
-                     # Simple logic: if we find a book, check liquidity
                      if token_id:
-                        book = self._clob_adapter.get_orderbook(token_id)
+                        book = await self._clob_adapter.get_orderbook(token_id)
                         if book:
                              # 3. Check Liquidity / Spread
                              # Calculate sizing based on available capital and config %
@@ -150,6 +145,8 @@ class StrategyADutching(BaseStrategy):
                                  # Price = Best Ask
                                  price = book.best_ask
                                  
+                                 # submit_order is sync (adds to queue), execute_order is handled by engine loop
+                                 # engine expects submit_order to be quick.
                                  order_id = self._execution.submit_order(
                                      strategy=self._name,
                                      order_type="FOK", # Fill or Kill for safety

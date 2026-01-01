@@ -7,6 +7,7 @@ Heartbeat monitoring and dispatch to execution engine.
 from enum import Enum
 from typing import Callable
 import threading
+import asyncio
 import time
 
 from .config_loader import BotConfig, ConfigLoader
@@ -18,6 +19,7 @@ from .audit_logger import AuditLogger
 from .credentials_manager import CredentialsManager, CredentialsStatus
 from .market_data import GammaClient
 from .clob_adapter import ClobAdapter
+from .websocket_client import WebSocketClient
 from .strategies.base_strategy import StrategyStatus
 from .strategies.strategy_a_dutching import StrategyADutching
 from .strategies.strategy_b_market_making import StrategyBMarketMaking
@@ -53,6 +55,8 @@ class Orchestrator:
         
         self._strategy_a: StrategyADutching | None = None
         self._strategy_b: StrategyBMarketMaking | None = None
+        
+        self._ws_client: WebSocketClient | None = None
         
         self._heartbeat_thread: threading.Thread | None = None
         self._heartbeat_running = False
@@ -113,11 +117,16 @@ class Orchestrator:
         self._market_data = GammaClient(self._config.market.gamma_api_url, self._audit)
         self._clob_adapter = ClobAdapter(self._config.market.clob_api_url)
         
+        # Initialize WebSocket Client (Connection happens in async loop)
+        ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+        self._ws_client = WebSocketClient(ws_url, self._audit)
+        
         # Configure Execution Engine
         if self._execution:
             self._execution.configure_api(
                 host=self._config.market.clob_api_url,
-                chain_id=137 # Default Polygon Mainnet
+                chain_id=137, # Default Polygon Mainnet
+                paper_trading=self._config.market.paper_trading
             )
         
         self._strategy_a = StrategyADutching(
@@ -134,7 +143,8 @@ class Orchestrator:
             capital_manager=self._capital,
             execution_engine=self._execution,
             audit_logger=self._audit,
-            clob_adapter=self._clob_adapter
+            clob_adapter=self._clob_adapter,
+            websocket_client=self._ws_client
         )
     
     def launch(self) -> tuple[bool, str]:
@@ -146,8 +156,10 @@ class Orchestrator:
             if not self._config:
                 return False, "No configuration loaded"
             
-            # Verify credentials are loaded
-            if not self._credentials.is_unlocked:
+            # Verify credentials are loaded (unless paper trading)
+            is_paper = self._config.market.paper_trading if self._config else False
+            
+            if not is_paper and not self._credentials.is_unlocked:
                 return False, "Vault non déverrouillé - credentials requis"
             
             decision = self._policy.validate(ActionType.LAUNCH_BOT)
@@ -156,7 +168,7 @@ class Orchestrator:
             
             # Provide credentials to execution engine
             self._execution.set_credentials(self._credentials)
-            self._execution.enable()
+            # We Enable Execution Engine INSIDE the async loop to ensure task creation works
             
             self._set_state(BotState.RUNNING)
             self._policy.set_bot_state("RUNNING")
@@ -171,121 +183,70 @@ class Orchestrator:
             
             self._audit.log_operator_action("BOT_LAUNCHED")
             return True, "Bot launched successfully"
-    
-    def pause(self) -> tuple[bool, str]:
-        """
-        Pause the bot.
-        Maintains current positions but stops new activity.
-        """
-        with self._lock:
-            decision = self._policy.validate(ActionType.PAUSE_BOT)
-            if not decision.allowed:
-                return False, decision.reason
-            
-            self._set_state(BotState.PAUSED)
-            self._policy.set_bot_state("PAUSED")
-            
-            self._audit.log_operator_action("BOT_PAUSED")
-            return True, "Bot paused"
-    
-    def resume(self) -> tuple[bool, str]:
-        """
-        Resume the bot from paused state.
-        """
-        with self._lock:
-            decision = self._policy.validate(ActionType.RESUME_BOT)
-            if not decision.allowed:
-                return False, decision.reason
-            
-            self._set_state(BotState.RUNNING)
-            self._policy.set_bot_state("RUNNING")
-            
-            self._audit.log_operator_action("BOT_RESUMED")
-            return True, "Bot resumed"
-    
-    def emergency_stop(self) -> tuple[bool, str]:
-        """
-        Emergency stop - triggers kill switch.
-        """
-        self._kill_switch.trigger(
-            KillSwitchTrigger.OPERATOR_MANUAL,
-            "Operator emergency stop"
-        )
-        return True, "Emergency stop activated"
-    
-    def _on_kill_switch_triggered(self) -> None:
-        """Handle kill switch activation."""
-        self._stop_heartbeat()
-        
-        if self._strategy_a:
-            self._strategy_a.abort()
-        if self._strategy_b:
-            self._strategy_b.abort()
-        
-        if self._execution:
-            self._execution.cancel_all_orders()
-            self._execution.disable()
-        
-        # Destroy credentials in memory
-        self._credentials.destroy_credentials()
-        
-        self._set_state(BotState.KILLED)
-        self._policy.set_bot_state("KILLED")
-        self._policy.set_kill_switch_active(True)
-    
+
     def _start_heartbeat(self) -> None:
-        """Start heartbeat monitoring thread."""
+        """Start heartbeat monitoring thread with AsyncIO loop."""
         self._heartbeat_running = True
         self._last_heartbeat = time.time()
-        self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        # Start a thread that runs the asyncio loop
+        self._heartbeat_thread = threading.Thread(target=self._run_async_loop, daemon=True)
         self._heartbeat_thread.start()
-    
-    def shutdown(self) -> None:
-        """
-        Full system shutdown.
-        Stops threads, locks vault, and cleans up.
-        Called on application exit.
-        """
-        self._stop_heartbeat()
         
-        # Ensure strategies are aborted if running
-        if self._strategy_a:
-            self._strategy_a.abort()
-        if self._strategy_b:
-            self._strategy_b.abort()
+    def _run_async_loop(self):
+        """Entry point for the background thread."""
+        try:
+            asyncio.run(self._heartbeat_loop_async())
+        except Exception as e:
+            self._audit.log_error("CRITICAL_LOOP_FAILURE", str(e))
+            
+    async def _heartbeat_loop_async(self) -> None:
+        """Heartbeat monitoring loop (Async)."""
+        interval = self._config.market.heartbeat_interval_seconds if self._config else 5
+        
+        # Connect WS Client if not connected
+        if self._ws_client and not self._ws_client._running:
+            await self._ws_client.connect()
+        
+        # Enable Execution Engine here (in the loop)
+        if self._execution and not self._execution.is_enabled:
+             self._execution.enable()
+        
+        while self._heartbeat_running:
+            await asyncio.sleep(interval)
+            
+            if self._state == BotState.RUNNING:
+                self._last_heartbeat = time.time()
+                
+                # Run strategies concurrently
+                tasks = []
+                if self._strategy_a and self._strategy_a.is_active:
+                    tasks.append(self._strategy_a.process_tick())
+                
+                if self._strategy_b and self._strategy_b.is_active:
+                    tasks.append(self._strategy_b.process_tick())
+                    
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Cleanup when loop stops
+        if self._ws_client:
+            await self._ws_client.disconnect()
             
         if self._execution:
             self._execution.disable()
-            
-        # Secure cleanup
-        if self._credentials:
-            self._credentials.lock_vault()
-            
-        self._set_state(BotState.IDLE)
-        self._audit.log_operator_action("SYSTEM_SHUTDOWN")
 
     def _stop_heartbeat(self) -> None:
         """Stop heartbeat monitoring thread."""
         self._heartbeat_running = False
         if self._heartbeat_thread and self._heartbeat_thread.is_alive():
-            self._heartbeat_thread.join(timeout=1.0)
-    
-    def _heartbeat_loop(self) -> None:
-        """Heartbeat monitoring loop."""
-        interval = self._config.market.heartbeat_interval_seconds if self._config else 5
-        timeout = self._config.market.connection_timeout_seconds if self._config else 30
-        
-        while self._heartbeat_running:
-            time.sleep(interval)
-            
-            if self._state == BotState.RUNNING:
-                self._last_heartbeat = time.time()
-                
-                if self._strategy_a and self._strategy_a.is_active:
-                    self._strategy_a.process_tick()
-                
-                if self._strategy_b and self._strategy_b.is_active:
-                    self._strategy_b.process_tick()
+            self._heartbeat_thread.join(timeout=2.0)
+
+    def _on_kill_switch_triggered(self) -> None:
+        """Callback when kill switch is triggered."""
+        self._set_state(BotState.KILLED)
+        self._audit.log_operator_action("KILL_SWITCH_CALLBACK_RECEIVED")
+        # Ensure thread stops
+        self._heartbeat_running = False
     
     def _set_state(self, state: BotState) -> None:
         """Update bot state and notify subscribers."""
