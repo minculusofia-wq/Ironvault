@@ -68,11 +68,7 @@ class KillSwitch:
                 try:
                     self._on_triggered()
                 except Exception as e:
-                    self._audit.log(
-                        self._audit._logger.info,
-                        "KILL_SWITCH_CALLBACK_ERROR",
-                        {"error": str(e)}
-                    )
+                    self._audit.log_error("KILL_SWITCH_CALLBACK_ERROR", str(e))
             
             self._notify_subscribers()
     

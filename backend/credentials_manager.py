@@ -205,7 +205,7 @@ class CredentialsManager:
                 return None
             return self._credentials.get(CRED_WALLET_PRIVATE_KEY)
     
-    def get_polymarket_credentials(self) -> tuple[str, str, str] | None:
+    def get_polymarket_credentials(self) -> dict[str, str] | None:
         """
         Get Polymarket API credentials for execution engine.
         Returns None if vault not unlocked.
@@ -215,12 +215,16 @@ class CredentialsManager:
         with self._lock:
             if not self._credentials:
                 return None
-            api_key = self._credentials.get(CRED_POLYMARKET_API_KEY)
-            api_secret = self._credentials.get(CRED_POLYMARKET_API_SECRET)
-            api_passphrase = self._credentials.get(CRED_POLYMARKET_API_PASSPHRASE)
             
-            if api_key and api_secret and api_passphrase:
-                return (api_key, api_secret, api_passphrase)
+            creds = {
+                'api_key': self._credentials.get(CRED_POLYMARKET_API_KEY),
+                'api_secret': self._credentials.get(CRED_POLYMARKET_API_SECRET),
+                'api_passphrase': self._credentials.get(CRED_POLYMARKET_API_PASSPHRASE),
+                'api_private_key': self._credentials.get(CRED_WALLET_PRIVATE_KEY)
+            }
+            
+            if all(creds.values()):
+                return creds
             return None
     
     def _validate_credentials(self) -> bool:

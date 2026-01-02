@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 
 @dataclass
@@ -162,15 +163,42 @@ class ConfigLoader:
         if risk['kill_switch_threshold'] <= 0:
             raise ConfigValidationError("risk.kill_switch_threshold must be positive")
     
+    def _validate_endpoint(self, url: str, section: str, key: str) -> str:
+        """Validate that a URL/Endpoint is well-formed and safe."""
+        if not url:
+            return url
+            
+        try:
+            parsed = urlparse(url)
+            # Basic scheme validation
+            if parsed.scheme not in ('http', 'https', 'ws', 'wss'):
+                raise ConfigValidationError(f"Invalid scheme in {section}.{key}: {parsed.scheme}")
+            
+            # Basic hostname validation (must have a domain)
+            if not parsed.netloc:
+                raise ConfigValidationError(f"Invalid hostname in {section}.{key}")
+                
+            return url
+        except Exception as e:
+            if isinstance(e, ConfigValidationError):
+                raise
+            raise ConfigValidationError(f"Malformed URL in {section}.{key}: {str(e)}")
+
     def _build_config(self, data: dict[str, Any], file_path: str) -> BotConfig:
         """Build typed configuration object from validated data."""
         market_data = data['market']
+        
+        # Security: Validate endpoints
+        rpc_url = self._validate_endpoint(market_data.get('rpc_url', ""), 'market', 'rpc_url')
+        clob_api_url = self._validate_endpoint(market_data.get('clob_api_url', ""), 'market', 'clob_api_url')
+        gamma_api_url = self._validate_endpoint(market_data.get('gamma_api_url', ""), 'market', 'gamma_api_url')
+
         market_config = MarketConfig(
             connection_timeout_seconds=market_data.get('connection_timeout_seconds', 30),
             heartbeat_interval_seconds=market_data.get('heartbeat_interval_seconds', 5),
-            rpc_url=market_data.get('rpc_url', "https://polygon-rpc.com"),
-            clob_api_url=market_data.get('clob_api_url', "https://clob.polymarket.com/"),
-            gamma_api_url=market_data.get('gamma_api_url', "https://gamma-api.polymarket.com/"),
+            rpc_url=rpc_url or "https://polygon-rpc.com",
+            clob_api_url=clob_api_url or "https://clob.polymarket.com/",
+            gamma_api_url=gamma_api_url or "https://gamma-api.polymarket.com/",
             paper_trading=market_data.get('paper_trading', False)
         )
         

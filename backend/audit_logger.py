@@ -53,21 +53,47 @@ class AuditLogger:
             "log_file": str(self._log_file)
         })
     
+    import re
+    _HEX_64_RE = re.compile(r'([0-9a-fA-F]{64})')
+    _REDACTED = "***REDACTED***"
+    _MAX_STRING_LEN = 1000
+
     def log(self, event_type: EventType, action: str, details: dict[str, Any] | None = None) -> None:
         """
-        Log an auditable event.
-        
-        Args:
-            event_type: Category of the event
-            action: Specific action name
-            details: Additional structured data
+        Log an auditable event with automated redaction.
         """
+        redacted_details = self._redact(details) if details else {}
         entry = {
             "type": event_type.value,
             "action": action,
-            "details": details or {}
+            "details": redacted_details
         }
         self._logger.info(f"{entry}")
+
+    def _redact(self, data: Any) -> Any:
+        """Recursively redact sensitive information."""
+        if isinstance(data, dict):
+            return {k: self._redact(v) if not self._is_sensitive_key(k) else self._REDACTED 
+                    for k, v in data.items()}
+        if isinstance(data, list):
+            return [self._redact(item) for item in data]
+        if isinstance(data, str):
+            # Mask hex keys (like private keys)
+            redacted = self._HEX_64_RE.sub(self._REDACTED, data)
+            # Truncate if too long
+            if len(redacted) > self._MAX_STRING_LEN:
+                return redacted[:self._MAX_STRING_LEN] + "... [TRUNCATED]"
+            return redacted
+        return data
+
+    def _is_sensitive_key(self, key: str) -> bool:
+        """Check if a dictionary key likely contains sensitive data."""
+        sensitive_patterns = {
+            "api_key", "secret", "private_key", "password", 
+            "token", "credential", "passphrase", "vault"
+        }
+        key_lower = key.lower()
+        return any(pattern in key_lower for pattern in sensitive_patterns)
     
     def log_operator_action(self, action: str, details: dict[str, Any] | None = None) -> None:
         """Log an operator-initiated action."""
