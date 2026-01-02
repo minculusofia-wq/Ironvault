@@ -275,7 +275,6 @@ class Orchestrator:
                 if self._ws_client and not self._ws_client._running:
                     try:
                         await self._ws_client.connect()
-                        self._audit.log_operator_action("WS_RECONNECTED")
                     except Exception as e:
                         # Log error but don't stop the loop
                         self._audit.log_error("WS_AUTO_RECONNECT_FAILED", str(e))

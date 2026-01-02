@@ -44,6 +44,16 @@ class WebSocketClient:
             self._audit.log_error("WS_CONNECT_ERROR", str(e))
             self._running = False
             self._ws = None
+    async def disconnect(self):
+        """Close the WebSocket connection."""
+        self._running = False
+        if self._ws:
+            try:
+                await self._ws.close()
+            except Exception:
+                pass
+            self._ws = None
+        self._audit.log_system_event("WS_DISCONNECTED")
 
     async def subscribe_orderbook(self, token_id: str, callback: Callable[[Any], None]):
         """
