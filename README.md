@@ -80,7 +80,7 @@ cp config/config.example.json config/config.json
 ### Mode Paper Trading (Simulation)
 Idéal pour tester les stratégies sans risque.
 1. Lancer l'application : `python main.py` ou `./Start_Bot.command`
-2. Charger `config/config_paper.json` ou **`config/config_paper_micros.json`** (pour un petit capital de 100$)
+2. Charger `config/config_paper.json`, `config/config_paper_micros.json` ou **`config/config_paper_micros_aggressive.json`** (pour voir le bot trader intensément en Paper Trading).
 3. (Optionnel) Déverrouiller le vault (non requis pour le paper trading)
 4. Cliquer sur **Lancer**
 

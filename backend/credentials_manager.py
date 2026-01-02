@@ -68,7 +68,7 @@ class CredentialsManager:
         # Callbacks
         self._status_callbacks: list[Callable[[CredentialsStatus], None]] = []
         
-        self._audit.log(EventType.SYSTEM_ERROR, "CREDENTIALS_MANAGER_INITIALIZED", {
+        self._audit.log(EventType.OPERATOR_ACTION, "CREDENTIALS_MANAGER_INITIALIZED", {
             "vault_path": self._vault_path,
             "vault_exists": self._vault.exists()
         })
