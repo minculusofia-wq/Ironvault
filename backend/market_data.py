@@ -63,12 +63,14 @@ class GammaClient:
             # Note: boolean params in requests can differ from aiohttp params handling 
             # (aiohttp often needs str for bools in params dict if strict)
             
-            async with session.get(url, params=params, timeout=10) as response:
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with session.get(url, params=params, timeout=timeout) as response:
                 response.raise_for_status()
                 events = await response.json()
             
             return events
             
         except Exception as e:
-            self._audit.log_error("GAMMA_API_ERROR", f"Scan failed: {str(e)}")
+            error_details = f"{type(e).__name__}: {str(e)}" if str(e) else repr(e)
+            self._audit.log_error("GAMMA_API_ERROR", f"Scan failed: {error_details}")
             return []

@@ -43,6 +43,7 @@ class WebSocketClient:
         except Exception as e:
             self._audit.log_error("WS_CONNECT_ERROR", str(e))
             self._running = False
+            self._ws = None
 
     async def subscribe_orderbook(self, token_id: str, callback: Callable[[Any], None]):
         """
@@ -89,6 +90,7 @@ class WebSocketClient:
             except websockets.exceptions.ConnectionClosed:
                 self._audit.log_error("WS_CLOSED", "Connection closed unexpectedly")
                 self._running = False
+                self._ws = None
                 break
             except Exception as e:
                 self._audit.log_error("WS_ERROR", str(e))

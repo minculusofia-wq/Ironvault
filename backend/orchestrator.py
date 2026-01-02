@@ -269,26 +269,31 @@ class Orchestrator:
         """Heartbeat monitoring loop (Async)."""
         interval = self._config.market.heartbeat_interval_seconds if self._config else 5
         
-        # Connect WS Client if not connected
-        if self._ws_client and not self._ws_client._running:
-            try:
-                await self._ws_client.connect()
-            except Exception as e:
-                self._audit.log_error("WS_CONNECT_RETRY_FAILED", str(e))
-        
-        # Enable Execution Engine here (in the loop)
-        if self._execution and not self._execution.is_enabled:
-             try:
-                 self._execution.enable()
-             except Exception as e:
-                 self._audit.log_error("EXECUTION_ENABLE_FAILED", str(e))
-        
         while self._heartbeat_running:
             try:
+                # 1. Ensure WebSocket is connected (Auto-Reconnect)
+                if self._ws_client and not self._ws_client._running:
+                    try:
+                        await self._ws_client.connect()
+                        self._audit.log_operator_action("WS_RECONNECTED")
+                    except Exception as e:
+                        # Log error but don't stop the loop
+                        self._audit.log_error("WS_AUTO_RECONNECT_FAILED", str(e))
+                
+                # 2. Ensure Execution Engine is enabled
+                if self._execution and not self._execution.is_enabled:
+                    try:
+                        self._execution.enable()
+                    except Exception as e:
+                        self._audit.log_error("EXECUTION_RE_ENABLE_FAILED", str(e))
+
+                # 3. Wait for interval
                 await asyncio.sleep(interval)
                 
+                # 4. Process Strategy Ticks
                 if self._state == BotState.RUNNING:
                     self._last_heartbeat = time.time()
+                    self._audit.log_operator_action("HEARTBEAT_TICK")
                     
                     # Run strategies concurrently
                     tasks = []
@@ -299,7 +304,11 @@ class Orchestrator:
                         tasks.append(self._strategy_b.process_tick())
                         
                     if tasks:
-                        await asyncio.gather(*tasks, return_exceptions=True)
+                        # Use a timeout for strategy ticks to avoid hanging the loop
+                        try:
+                            await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=interval * 2)
+                        except asyncio.TimeoutError:
+                            self._audit.log_error("STRATEGY_TICK_TIMEOUT", f"Ticks took longer than {interval*2}s")
             except Exception as e:
                 self._audit.log_error("HEARTBEAT_LOOP_TICK_ERROR", str(e))
         
