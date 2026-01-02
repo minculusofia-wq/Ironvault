@@ -121,70 +121,91 @@ class StrategyADutching(BaseStrategy):
             # 1. Scan for Events via Gamma API
             events = await self._market_data.get_events(limit=5)
             
+            # 1b. Collect all target tokens first
+            target_tokens = []
+            token_to_market_map = {} # token_id -> market_info
+
             for event in events:
-                # Basic filter
                 if not self._is_valid_event(event):
                     continue
-                    
-                # 2. Analyze Order Book for each Market in Event
+                
                 markets = event.get('markets', [])
                 for market in markets:
-                     token_id = market.get('id')
-                     
-                     if token_id:
-                        # Update volatility filter with latest price (simulated or real)
-                        # clob_adapter.get_orderbook returns a book with best_bid/best_ask
-                        book = await self._clob_adapter.get_orderbook(token_id)
-                        
-                        if book:
-                             # 2a. Volatility Check
-                             if self._volatility:
-                                 self._volatility.update_price(token_id, book.midpoint)
-                                 if not self._volatility.is_safe(token_id):
-                                     continue
-                             
-                             # 3. Check Liquidity / Spread
-                             # Calculate sizing based on available capital and config %
-                             # Calculate sizing based on its own locked allocation
-                             trade_size_usd = self._locked_capital * (self._config.trade_size_percent / 100.0)
-                             
-                             # Cap size at max_executable (1% slippage)
-                             max_size_no_slip = self._clob_adapter.max_executable_size(book, "BUY", slippage_pct=1.0)
-                             
-                             # Final size is min of config size and safe liquidity size
-                             final_size = min(trade_size_usd, max_size_no_slip)
-                             
-                             # Ensure size is above min threshold (e.g. 5 USD)
-                             if final_size < 5.0:
-                                 continue
+                    token_id = market.get('id')
+                    if token_id:
+                        target_tokens.append(token_id)
+                        token_to_market_map[token_id] = market
+            
+            if not target_tokens:
+                return
 
-                             if self._clob_adapter.is_executable(book, "BUY", final_size, max_spread_pct=5.0):
-                                 self._audit.log_strategy_event(self._name, "OPPORTUNITY_FOUND", {
-                                     "token": token_id,
-                                     "size": final_size
-                                 })
-                                 
-                                 # 4. EXECUTE LIVE ORDER
-                                 # We are buying, so we cross the spread (Taker)
-                                 # Price = Best Ask
-                                 price = book.best_ask
-                                 
-                                 # submit_order is sync (adds to queue), execute_order is handled by engine loop
-                                 # engine expects submit_order to be quick.
-                                 order_id = self._execution.submit_order(
-                                     strategy=self._name,
-                                     order_type="FOK", # Fill or Kill for safety
-                                     params={
-                                         "token_id": token_id,
-                                         "price": str(price),
-                                         "size": str(final_size),
-                                         "side": "BUY"
-                                     }
-                                 )
-                                 
-                                 if order_id:
-                                     self._pending_orders.append(order_id)
-                                     self._audit.log_strategy_event(self._name, "ORDER_SUBMITTED", {"id": order_id})
+            # 2. Parallel Fetch of Orderbooks
+            import asyncio
+            # fetch all books concurrently
+            tasks = [self._clob_adapter.get_orderbook(tid) for tid in target_tokens]
+            # return_exceptions=True prevents one failed fetch from crashing the whole tick
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Map results back to tokens
+            orderbooks = {}
+            for tid, res in zip(target_tokens, results):
+                if isinstance(res, Exception):
+                    # Log warning but continue
+                    # self._audit.log_error("FETCH_ERROR", f"Failed to fetch book for {tid}: {res}")
+                    continue
+                if res: # res is MarketSnapshot or None
+                    orderbooks[tid] = res
+
+            # 3. Process Logic with Pre-fetched Data
+            for token_id, book in orderbooks.items():
+                if not book:
+                    continue
+                    
+                # 2a. Volatility Check
+                if self._volatility:
+                    self._volatility.update_price(token_id, book.midpoint)
+                    if not self._volatility.is_safe(token_id):
+                        continue
+                
+                # 3. Check Liquidity / Spread
+                trade_size_usd = self._locked_capital * (self._config.trade_size_percent / 100.0)
+                
+                # Cap size at max_executable (1% slippage)
+                max_size_no_slip = self._clob_adapter.max_executable_size(book, "BUY", slippage_pct=1.0)
+                
+                # Final size is min of config size and safe liquidity size
+                final_size = min(trade_size_usd, max_size_no_slip)
+                
+                # Ensure size is above min threshold (e.g. 5 USD)
+                if final_size < 5.0:
+                    continue
+
+                if self._clob_adapter.is_executable(book, "BUY", final_size, max_spread_pct=5.0):
+                    self._audit.log_strategy_event(self._name, "OPPORTUNITY_FOUND", {
+                        "token": token_id,
+                        "size": final_size
+                    })
+                    
+                    # 4. EXECUTE LIVE ORDER
+                    # We are buying, so we cross the spread (Taker)
+                    # Price = Best Ask
+                    price = book.best_ask
+                    
+                    # submit_order is sync (adds to queue)
+                    order_id = self._execution.submit_order(
+                        strategy=self._name,
+                        order_type="FOK", # Fill or Kill for safety
+                        params={
+                            "token_id": token_id,
+                            "price": str(price),
+                            "size": str(final_size),
+                            "side": "BUY"
+                        }
+                    )
+                    
+                    if order_id:
+                        self._pending_orders.append(order_id)
+                        self._audit.log_strategy_event(self._name, "ORDER_SUBMITTED", {"id": order_id})
                                  
         except Exception as e:
             self._audit.log_error("STRATEGY_A_ERROR", f"Error in process_tick: {e}")
