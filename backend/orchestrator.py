@@ -68,17 +68,43 @@ class Orchestrator:
     def load_config(self, file_path: str) -> tuple[bool, str]:
         """
         Load configuration from file.
+        Supports Hot-Reload if already running.
         Returns (success, message).
         """
         try:
+            was_running = self._state in [BotState.RUNNING, BotState.PAUSED]
+            
+            if was_running:
+                # Stop heartbeat and strategies before reloading
+                self._stop_heartbeat()
+                
+                # Release existing capital locks to avoid doubling up
+                if self._strategy_a:
+                    self._strategy_a.deactivate()
+                if self._strategy_b:
+                    self._strategy_b.deactivate()
+
             self._config = self._config_loader.load(file_path)
             self._audit.log_operator_action("CONFIG_LOADED", {
-                "file": file_path
+                "file": file_path,
+                "hot_reload": was_running
             })
             
             self._initialize_components()
+
+            if was_running:
+                # Re-launch automatically if it was running
+                # (Activation of strategies is handled in launch internally)
+                # But here we might want to just resume if it was RUNNING
+                if self._state == BotState.RUNNING:
+                    # Relaunch strategies
+                    if self._config.strategy_a.enabled:
+                        self._strategy_a.activate()
+                    if self._config.strategy_b.enabled:
+                        self._strategy_b.activate()
+                    self._start_heartbeat()
             
-            return True, f"Configuration loaded: {file_path}"
+            return True, f"Configuration {'re' if was_running else ''}chargée: {file_path}"
         except Exception as e:
             self._audit.log_operator_action("CONFIG_LOAD_FAILED", {
                 "file": file_path,

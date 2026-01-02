@@ -1,0 +1,36 @@
+{
+    "capital": {
+        "total": 100.0,
+        "max_allocation_strategy_a": 50.0,
+        "max_allocation_strategy_b": 50.0
+    },
+    "strategy_a": {
+        "enabled": true,
+        "name": "Strategy A - Dutching (Small Cap)",
+        "max_events": 3,
+        "min_odds": 1.05,
+        "max_odds": 4.0,
+        "trade_size_percent": 10.0
+    },
+    "strategy_b": {
+        "enabled": true,
+        "name": "Strategy B - MM (Small Cap)",
+        "spread_min": 0.015,
+        "spread_max": 0.08,
+        "max_exposure": 50.0,
+        "trade_size_percent": 10.0
+    },
+    "risk": {
+        "max_drawdown_percent": 10.0,
+        "max_daily_loss": 15.0,
+        "kill_switch_threshold": 20.0
+    },
+    "market": {
+        "connection_timeout_seconds": 30,
+        "heartbeat_interval_seconds": 2,
+        "rpc_url": "https://polygon-mainnet.g.alchemy.com/v2/kRJcIKMSOogm_STxgj4tL",
+        "clob_api_url": "https://clob.polymarket.com/",
+        "gamma_api_url": "https://gamma-api.polymarket.com/",
+        "paper_trading": false
+    }
+}

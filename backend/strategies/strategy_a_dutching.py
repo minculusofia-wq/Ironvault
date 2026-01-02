@@ -58,9 +58,10 @@ class StrategyADutching(BaseStrategy):
         
         self._audit.log_strategy_event(self._name, "ACTIVATION_STARTED")
         
-        # Lock a token amount for visibility in Dashboard
-        if self._capital.lock_for_strategy_a(1.0):
-            self._locked_capital = 1.0
+        # Lock full allocation for visibility and safety
+        max_alloc = self._capital.max_a
+        if self._capital.lock_for_strategy_a(max_alloc):
+            self._locked_capital = max_alloc
             
         self._clear_error()
         self._set_state(StrategyState.ACTIVE, "ACTIVE")
@@ -125,8 +126,8 @@ class StrategyADutching(BaseStrategy):
                         if book:
                              # 3. Check Liquidity / Spread
                              # Calculate sizing based on available capital and config %
-                             available_cap = self._capital.get_available_capital()
-                             trade_size_usd = available_cap * (self._config.trade_size_percent / 100.0)
+                             # Calculate sizing based on its own locked allocation
+                             trade_size_usd = self._locked_capital * (self._config.trade_size_percent / 100.0)
                              
                              # Cap size at max_executable (1% slippage)
                              max_size_no_slip = self._clob_adapter.max_executable_size(book, "BUY", slippage_pct=1.0)

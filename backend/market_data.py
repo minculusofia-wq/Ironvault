@@ -6,6 +6,8 @@ AsyncIO implementation using aiohttp.
 
 import aiohttp
 import asyncio
+import ssl
+import certifi
 from typing import Any
 from .audit_logger import AuditLogger
 
@@ -21,7 +23,9 @@ class GammaClient:
         
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            self._session = aiohttp.ClientSession(connector=connector)
         return self._session
     
     async def close(self):
@@ -54,9 +58,7 @@ class GammaClient:
             url = f"{self._base_url}/events"
             params = {
                 "limit": limit,
-                "closed": "false", # API expects string for bool sometimes, sticking to standard
-                "order": "volume_24h",
-                "ascending": "false"
+                "closed": "false"
             }
             # Note: boolean params in requests can differ from aiohttp params handling 
             # (aiohttp often needs str for bools in params dict if strict)

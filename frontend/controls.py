@@ -128,7 +128,7 @@ class ControlPanel(QFrame):
         is_paused = self._bot_state == "PAUSED"
         is_killed = self._bot_state == "KILLED"
         
-        self._load_config_btn.setEnabled(is_idle)
+        self._load_config_btn.setEnabled(not is_killed)
         self._credentials_btn.setEnabled(is_idle)
         
         # Launch requires config AND (vault unlocked OR paper trading)

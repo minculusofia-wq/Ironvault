@@ -14,6 +14,8 @@ Responsibilities:
 """
 
 import aiohttp
+import ssl
+import certifi
 from dataclasses import dataclass
 from typing import List, Dict, Optional, Tuple
 from decimal import Decimal
@@ -73,7 +75,9 @@ class ClobAdapter:
     
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            self._session = aiohttp.ClientSession(connector=connector)
         return self._session
 
     async def get_orderbook(self, token_id: str) -> Optional[MarketSnapshot]:

@@ -239,3 +239,13 @@ class CapitalManager:
     @property
     def locked_b(self) -> float:
         return self._locked_b
+
+    @property
+    def max_a(self) -> float:
+        """Maximum allocation allowed for Strategy A."""
+        return self._max_a
+
+    @property
+    def max_b(self) -> float:
+        """Maximum allocation allowed for Strategy B."""
+        return self._max_b

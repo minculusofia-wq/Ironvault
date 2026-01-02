@@ -21,7 +21,9 @@ Bot de trading automatisé sécurisé avec interface graphique.
 - **Support Paper Trading**: Mode simulation sans risque avec `config_paper.json`.
 - **Données de Marché Gamma**: Flux de prix en temps réel pour une prise de décision précise.
 - **Interface PySide6**: Dashboard moderne et réactif pour le monitoring et le contrôle.
-- **Gestion Sécurisée des Credentials**: Clés API stockées en mémoire uniquement.
+- **Hot-Reload de Configuration**: Chargez de nouveaux réglages ou changez de mode (Paper/Live) sans redémarrer le bot.
+- **Gestion Sécurisée des Credentials**: Clés API stockées en mémoire uniquement via un Vault chiffré.
+- **Support macOS natif**: Support SSL corrigé via `certifi`.
 
 
 ## 📁 Structure du Projet
@@ -71,20 +73,20 @@ cp config/config.example.json config/config.json
 
 2. Éditer `config/config.json` avec vos paramètres
 
-3. **Important**: La GUI ne peut pas modifier la configuration. Toute modification nécessite l'édition du fichier + redémarrage.
+3. **Hot-Reload**: Vous pouvez charger une nouvelle configuration directement depuis la GUI pendant que le bot tourne. Les stratégies se réinitialiseront automatiquement avec les nouveaux paramètres.
 
 ## ▶️ Lancement
 
 ### Mode Paper Trading (Simulation)
 Idéal pour tester les stratégies sans risque.
 1. Lancer l'application : `python main.py` ou `./Start_Bot.command`
-2. Charger `config/config_paper.json`
+2. Charger `config/config_paper.json` ou **`config/config_paper_micros.json`** (pour un petit capital de 100$)
 3. (Optionnel) Déverrouiller le vault (non requis pour le paper trading)
 4. Cliquer sur **Lancer**
 
 ### Mode Réel
 1. Lancer l'application
-2. Charger `config/config.json` (avec vos clés API)
+2. Charger `config/config.json` ou **`config/config_live_micros.json`** (pour un petit capital de 100$)
 3. Déverrouiller le vault pour charger les credentials en mémoire
 4. Cliquer sur **Lancer**
 

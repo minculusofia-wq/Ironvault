@@ -49,7 +49,7 @@ class AuditLogger:
         
         self._logger.addHandler(file_handler)
         
-        self.log(EventType.SYSTEM_ERROR, "AUDIT_LOGGER_INITIALIZED", {
+        self.log(EventType.OPERATOR_ACTION, "AUDIT_LOGGER_INITIALIZED", {
             "log_file": str(self._log_file)
         })
     
