@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Slot
 
 from .styles import COLORS, get_status_style, get_capital_bar_style
+from .orderbook_visualizer import OrderbookVisualizer
 
 
 class CapitalPanel(QFrame):
@@ -22,7 +23,7 @@ class CapitalPanel(QFrame):
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         
-        title = QLabel("💰 Capital")
+        title = QLabel("💰 CAPITAL")
         title.setProperty("class", "section")
         layout.addWidget(title)
         
@@ -131,7 +132,7 @@ class SystemPanel(QFrame):
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         
-        title = QLabel("⚙️ Système")
+        title = QLabel("⚙️ SYSTÈME")
         title.setProperty("class", "section")
         layout.addWidget(title)
         
@@ -213,6 +214,53 @@ class SystemPanel(QFrame):
             self._vault_label.setStyleSheet(f"color: {COLORS['text_dim']}")
 
 
+class PerformancePanel(QFrame):
+    """Panel displaying trading performance stats from SQLite."""
+    
+    def __init__(self):
+        super().__init__()
+        self._setup_ui()
+    
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        title = QLabel("📈 Performance (v2.0)")
+        title.setProperty("class", "section")
+        layout.addWidget(title)
+        
+        grid = QGridLayout()
+        grid.setSpacing(8)
+        
+        grid.addWidget(QLabel("TOTAL TRADES:"), 0, 0)
+        self._trades_label = QLabel("0")
+        grid.addWidget(self._trades_label, 0, 1, Qt.AlignmentFlag.AlignRight)
+        
+        grid.addWidget(QLabel("WIN RATE:"), 1, 0)
+        self._winrate_label = QLabel("0.0%")
+        self._winrate_label.setStyleSheet(f"color: {COLORS['accent']}")
+        grid.addWidget(self._winrate_label, 1, 1, Qt.AlignmentFlag.AlignRight)
+        
+        grid.addWidget(QLabel("Profit Total (USD):"), 2, 0)
+        self._pnl_label = QLabel("0.00")
+        self._pnl_label.setProperty("class", "value")
+        grid.addWidget(self._pnl_label, 2, 1, Qt.AlignmentFlag.AlignRight)
+        
+        layout.addLayout(grid)
+    
+    @Slot(dict)
+    def update_stats(self, stats: dict):
+        """Update performance metrics."""
+        self._trades_label.setText(str(stats.get("total_trades", 0)))
+        win_rate = stats.get("win_rate", 0)
+        self._winrate_label.setText(f"{win_rate:.1f}%")
+        pnl = stats.get("total_pnl", 0.0)
+        self._pnl_label.setText(f"{pnl:,.2f}")
+        if pnl > 0:
+            self._pnl_label.setStyleSheet(f"color: {COLORS['success']}")
+        elif pnl < 0:
+            self._pnl_label.setStyleSheet(f"color: {COLORS['danger']}")
+
+
 class Dashboard(QWidget):
     """Main dashboard widget - read-only display."""
     
@@ -223,26 +271,34 @@ class Dashboard(QWidget):
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setSpacing(15)
+        layout.setContentsMargins(15, 15, 15, 15)
         
-        header = QLabel("🏦 IRONVAULT Trading Bot")
-        header.setProperty("class", "title")
-        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(header)
-        
+        # TOP: System & Capital side-by-side
+        top_row = QHBoxLayout()
         self.system_panel = SystemPanel()
-        layout.addWidget(self.system_panel)
-        
+        top_row.addWidget(self.system_panel, 1)
         self.capital_panel = CapitalPanel()
-        layout.addWidget(self.capital_panel)
+        top_row.addWidget(self.capital_panel, 1)
+        layout.addLayout(top_row)
         
-        strategies_layout = QHBoxLayout()
+        # MIDDLE: Strategies
+        strat_row = QHBoxLayout()
+        self.strategy_a_panel = StrategyPanel("Strategy_A", "DUTCHING MULTI-ISSUES")
+        strat_row.addWidget(self.strategy_a_panel)
+        self.strategy_b_panel = StrategyPanel("Strategy_B", "TENUE DE MARCHÉ (MM)")
+        strat_row.addWidget(self.strategy_b_panel)
+        layout.addLayout(strat_row)
         
-        self.strategy_a_panel = StrategyPanel("Strategy_A", "Dutching Multi-Issues")
-        strategies_layout.addWidget(self.strategy_a_panel)
+        # BOTTOM: Analytics (v2.0)
+        analytics_group = QGroupBox("ANALYTIQUES & CARNET (v2.0)")
+        analytics_layout = QHBoxLayout(analytics_group)
         
-        self.strategy_b_panel = StrategyPanel("Strategy_B", "Tenue de Marché")
-        strategies_layout.addWidget(self.strategy_b_panel)
+        self.performance_panel = PerformancePanel()
+        self.performance_panel.setFixedWidth(280)
+        analytics_layout.addWidget(self.performance_panel)
         
-        layout.addLayout(strategies_layout)
+        self.orderbook_panel = OrderbookVisualizer()
+        analytics_layout.addWidget(self.orderbook_panel)
         
+        layout.addWidget(analytics_group)
         layout.addStretch()

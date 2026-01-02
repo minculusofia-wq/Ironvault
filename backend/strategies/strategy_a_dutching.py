@@ -11,6 +11,8 @@ from ..audit_logger import AuditLogger
 from ..config_loader import StrategyAConfig
 from ..market_data import GammaClient
 from ..clob_adapter import ClobAdapter
+from ..performance_tracker import PerformanceTracker, TradeRecord
+from ..volatility_filter import VolatilityFilter
 
 class StrategyADutching(BaseStrategy):
     """
@@ -28,7 +30,9 @@ class StrategyADutching(BaseStrategy):
         execution_engine: ExecutionEngine,
         audit_logger: AuditLogger,
         market_data: GammaClient,
-        clob_adapter: ClobAdapter
+        clob_adapter: ClobAdapter,
+        performance_tracker: PerformanceTracker | None = None,
+        volatility_filter: VolatilityFilter | None = None
     ):
         super().__init__("Strategy_A_Dutching")
         
@@ -38,6 +42,8 @@ class StrategyADutching(BaseStrategy):
         self._audit = audit_logger
         self._market_data = market_data
         self._clob_adapter = clob_adapter
+        self._performance = performance_tracker
+        self._volatility = volatility_filter
         
         self._active_events: list[dict] = []
         self._pending_orders: list[str] = []
@@ -106,6 +112,10 @@ class StrategyADutching(BaseStrategy):
         # Max events check
         if len(self._active_events) >= self._config.max_events:
             return
+            
+        # 0. Global Volatility Check
+        # (This is a simplified check, ideally we check per token later)
+        # For now, we'll check inside the loop per token.
         
         try:
             # 1. Scan for Events via Gamma API
@@ -122,8 +132,17 @@ class StrategyADutching(BaseStrategy):
                      token_id = market.get('id')
                      
                      if token_id:
+                        # Update volatility filter with latest price (simulated or real)
+                        # clob_adapter.get_orderbook returns a book with best_bid/best_ask
                         book = await self._clob_adapter.get_orderbook(token_id)
+                        
                         if book:
+                             # 2a. Volatility Check
+                             if self._volatility:
+                                 self._volatility.update_price(token_id, book.midpoint)
+                                 if not self._volatility.is_safe(token_id):
+                                     continue
+                             
                              # 3. Check Liquidity / Spread
                              # Calculate sizing based on available capital and config %
                              # Calculate sizing based on its own locked allocation

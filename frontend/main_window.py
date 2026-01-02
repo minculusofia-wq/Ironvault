@@ -5,8 +5,9 @@ Primary application window integrating dashboard and controls.
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QStatusBar,
-    QMessageBox
+    QMessageBox, QTabWidget
 )
+from PySide6.QtGui import QIcon
 from PySide6.QtCore import Slot, QTimer
 
 from .dashboard import Dashboard
@@ -42,14 +43,18 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         
         layout = QVBoxLayout(central_widget)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(15)
+        layout.setContentsMargins(10, 10, 10, 10)
         
+        self._tabs = QTabWidget()
+        layout.addWidget(self._tabs)
+        
+        # TAB 1: DASHBOARD
         self._dashboard = Dashboard()
-        layout.addWidget(self._dashboard, stretch=1)
+        self._tabs.addTab(self._dashboard, "📊 TABLEAU DE BORD")
         
+        # TAB 2: SETTINGS & SECURITY
         self._controls = ControlPanel()
-        layout.addWidget(self._controls)
+        self._tabs.addTab(self._controls, "⚙️ PARAMÈTRES & SÉCURITÉ")
         
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
@@ -279,6 +284,17 @@ class MainWindow(QMainWindow):
                 status_b.active_positions,
                 status_b.last_action
             )
+        
+        # 5. Update Performance Stats (v2.0)
+        stats = self._orchestrator.performance_stats
+        self._dashboard.performance_panel.update_stats(stats)
+        
+        # 6. Update Orderbook Visualizer
+        snapshots = self._orchestrator.live_orderbook_snapshots
+        if snapshots:
+            # For now, display the first available market
+            first_market = next(iter(snapshots.values()))
+            self._dashboard.orderbook_panel.update_data(first_market)
         
         ks_status = self._orchestrator.kill_switch_status
         if ks_status:

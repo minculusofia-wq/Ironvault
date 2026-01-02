@@ -12,6 +12,8 @@ from ..config_loader import StrategyBConfig
 from ..clob_adapter import ClobAdapter
 from ..websocket_client import WebSocketClient
 from ..live_orderbook import LiveOrderBook
+from ..performance_tracker import PerformanceTracker, TradeRecord
+from ..volatility_filter import VolatilityFilter
 from typing import Any
 import time
 
@@ -29,7 +31,9 @@ class StrategyBMarketMaking(BaseStrategy):
         execution_engine: ExecutionEngine,
         audit_logger: AuditLogger,
         clob_adapter: ClobAdapter,
-        websocket_client: WebSocketClient
+        websocket_client: WebSocketClient,
+        performance_tracker: PerformanceTracker | None = None,
+        volatility_filter: VolatilityFilter | None = None
     ):
         super().__init__("Strategy_B_MarketMaking")
         
@@ -39,6 +43,8 @@ class StrategyBMarketMaking(BaseStrategy):
         self._audit = audit_logger
         self._clob_adapter = clob_adapter
         self._ws_client = websocket_client
+        self._performance = performance_tracker
+        self._volatility = volatility_filter
         
         self._active_quotes: dict[str, dict] = {} # market_id -> {orders: [ids], prices: {bid: x, ask: y}}
         self._live_books: dict[str, LiveOrderBook] = {} # market_id -> LiveOrderBook
@@ -174,10 +180,36 @@ class StrategyBMarketMaking(BaseStrategy):
         """
         # 1. Calculate Desired Price
         mid = book.midpoint
-        spread_fraction = max(self._config.spread_min, 0.01) # Default 1% if 0
         
-        buy_price = mid * (1 - spread_fraction / 2)
-        sell_price = mid * (1 + spread_fraction / 2)
+        # v2.0 Dynamic Spread based on Order Book Imbalance
+        # Calculate imbalance from top 5 levels (LiveOrderBook.get_snapshot returns top levels)
+        bids = book.bids[:5]
+        asks = book.asks[:5]
+        
+        bid_vol = sum(float(b[1]) for b in bids)
+        ask_vol = sum(float(a[1]) for a in asks)
+        total_vol = bid_vol + ask_vol
+        
+        imbalance = (bid_vol - ask_vol) / total_vol if total_vol > 0 else 0
+        
+        # Adjust spread based on imbalance
+        # If imbalance > 0.5, we shift prices up (more demand)
+        # If imbalance < -0.5, we shift prices down (more supply)
+        # We'll use a simple shift factor
+        shift_factor = imbalance * 0.002 # Max 0.2% shift
+        
+        base_spread = max(self._config.spread_min, 0.01)
+        
+        buy_price = mid * (1 - base_spread / 2 + shift_factor)
+        sell_price = mid * (1 + base_spread / 2 + shift_factor)
+        
+        # Volatility Check
+        if self._volatility:
+            self._volatility.update_price(market_id, mid)
+            if not self._volatility.is_safe(market_id):
+                # If volatile, widen spread significantly or stop quoting
+                buy_price *= 0.99
+                sell_price *= 1.01
         
         # Rounding (Important for CLOB) - simplified here
         buy_price = round(buy_price, 6)
@@ -219,11 +251,19 @@ class StrategyBMarketMaking(BaseStrategy):
         else:
             needs_new = True
             
-        if needs_new:
             # Place new order
-            # Size calc
-            size_usd = self._locked_capital * (self._config.trade_size_percent / 100.0)
+            # Size calc (Config vs Liquidity)
+            trade_size_usd = self._locked_capital * (self._config.trade_size_percent / 100.0)
             
+            # Use clob_adapter to find safe size (max 0.5% slippage for MM)
+            # We don't have the full book here, only the snapshot midpoint
+            # but we can use the snapshot we have.
+            max_size = self._clob_adapter.max_executable_size(book, side, slippage_pct=0.5)
+            final_size = min(trade_size_usd, max_size)
+            
+            if final_size < 1.0: # Min 1 USD for MM
+                return
+
             # Submit
             new_id = self._execution.submit_order(
                 strategy=self._name,
@@ -231,7 +271,7 @@ class StrategyBMarketMaking(BaseStrategy):
                 params={
                     "token_id": market_id,
                     "price": str(desired_price),
-                    "size": str(size_usd),
+                    "size": str(final_size),
                     "side": side
                 }
             )
@@ -275,6 +315,21 @@ class StrategyBMarketMaking(BaseStrategy):
         self._set_state(StrategyState.INACTIVE, "ABORTED")
         self._audit.log_strategy_event(self._name, "ABORTED")
     
+    @property
+    def live_orderbook_snapshots(self) -> dict[str, dict]:
+        """Get live snapshots of all tracked orderbooks."""
+        snapshots = {}
+        for market_id, book in self._live_books.items():
+            snap = book.get_snapshot()
+            if snap:
+                snapshots[market_id] = {
+                    "bids": snap.bids[:10],
+                    "asks": snap.asks[:10],
+                    "midpoint": snap.midpoint,
+                    "spread_pct": snap.spread_pct
+                }
+        return snapshots
+
     def _check_exposure(self) -> float:
         """Calculate current position exposure."""
         return sum(abs(pos) for pos in self._positions.values())

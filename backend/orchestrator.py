@@ -13,7 +13,7 @@ import time
 from .config_loader import BotConfig, ConfigLoader
 from .capital_manager import CapitalManager
 from .policy_layer import PolicyLayer, ActionType
-from .execution_engine import ExecutionEngine
+from .execution_engine import ExecutionEngine, OrderStatus, Order
 from .kill_switch import KillSwitch, KillSwitchTrigger
 from .audit_logger import AuditLogger
 from .credentials_manager import CredentialsManager, CredentialsStatus
@@ -23,6 +23,8 @@ from .websocket_client import WebSocketClient
 from .strategies.base_strategy import StrategyStatus
 from .strategies.strategy_a_dutching import StrategyADutching
 from .strategies.strategy_b_market_making import StrategyBMarketMaking
+from .performance_tracker import PerformanceTracker, TradeRecord
+from .volatility_filter import VolatilityFilter
 
 
 class BotState(Enum):
@@ -55,6 +57,9 @@ class Orchestrator:
         
         self._strategy_a: StrategyADutching | None = None
         self._strategy_b: StrategyBMarketMaking | None = None
+        
+        self._performance: PerformanceTracker | None = None
+        self._volatility: VolatilityFilter | None = None
         
         self._ws_client: WebSocketClient | None = None
         
@@ -143,6 +148,10 @@ class Orchestrator:
         self._market_data = GammaClient(self._config.market.gamma_api_url, self._audit)
         self._clob_adapter = ClobAdapter(self._config.market.clob_api_url)
         
+        # v2.0 Optimizations
+        self._performance = PerformanceTracker(self._audit)
+        self._volatility = VolatilityFilter(self._audit)
+        
         # Initialize WebSocket Client (Connection happens in async loop)
         ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
         self._ws_client = WebSocketClient(ws_url, self._audit)
@@ -154,6 +163,7 @@ class Orchestrator:
                 chain_id=137, # Default Polygon Mainnet
                 paper_trading=self._config.market.paper_trading
             )
+            self._execution.subscribe_status(self._on_execution_status_link)
         
         self._strategy_a = StrategyADutching(
             config=self._config.strategy_a,
@@ -161,7 +171,9 @@ class Orchestrator:
             execution_engine=self._execution,
             audit_logger=self._audit,
             market_data=self._market_data,
-            clob_adapter=self._clob_adapter
+            clob_adapter=self._clob_adapter,
+            performance_tracker=self._performance,
+            volatility_filter=self._volatility
         )
         
         self._strategy_b = StrategyBMarketMaking(
@@ -170,7 +182,9 @@ class Orchestrator:
             execution_engine=self._execution,
             audit_logger=self._audit,
             clob_adapter=self._clob_adapter,
-            websocket_client=self._ws_client
+            websocket_client=self._ws_client,
+            performance_tracker=self._performance,
+            volatility_filter=self._volatility
         )
     
     def launch(self) -> tuple[bool, str]:
@@ -240,6 +254,32 @@ class Orchestrator:
             self._kill_switch.trigger(KillSwitchTrigger.OPERATOR_MANUAL, "Arrêt d'urgence opérateur")
             return True, "Arrêt d'urgence déclenché"
         return False, "Kill switch non initialisé"
+
+    def _on_execution_status_link(self, order: Order) -> None:
+        """Callback from ExecutionEngine when an order status changes."""
+        if order.status == OrderStatus.COMPLETED and self._performance:
+            try:
+                # Map Order to TradeRecord
+                # params structure: {'token_id': x, 'price': y, 'size': z, 'side': w}
+                p = order.params
+                result = order.result or {}
+                
+                trade = TradeRecord(
+                    trade_id=order.order_id,
+                    strategy=order.strategy,
+                    order_type=order.order_type,
+                    symbol=p.get('token_id', 'unknown'),
+                    side=p.get('side', 'unknown'),
+                    price=float(p.get('price', 0)),
+                    size=float(p.get('size', 0)),
+                    pnl=0.0, # PnL calculation would happen on settlement or sell
+                    timestamp=result.get('timestamp', time.time()),
+                    details=json.dumps(result)
+                )
+                self._performance.record_trade(trade)
+                self._audit.log_strategy_event(order.strategy, "TRADE_RECORDED_PERSISTENTLY", {"id": order.order_id})
+            except Exception as e:
+                self._audit.log_error("TRADE_RECORD_FAILED", f"Error mapping order to TradeRecord: {e}")
 
     def shutdown(self) -> None:
         """Clean shutdown of application."""
@@ -364,6 +404,20 @@ class Orchestrator:
     def capital_state(self):
         return self._capital.state if self._capital else None
     
+    @property
+    def live_orderbook_snapshots(self) -> dict[str, dict]:
+        """Get live snapshots for all active markets in Strategy B."""
+        if self._strategy_b:
+            return self._strategy_b.live_orderbook_snapshots
+        return {}
+
+    @property
+    def performance_stats(self) -> dict:
+        """Get global performance stats."""
+        if self._performance:
+            return self._performance.get_summary_stats()
+        return {}
+
     @property
     def strategy_a_status(self) -> StrategyStatus | None:
         return self._strategy_a.get_status() if self._strategy_a else None

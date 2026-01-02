@@ -156,6 +156,35 @@ QStatusBar {{
     padding: 5px;
 }}
 
+QTabWidget::pane {{
+    border: 1px solid {COLORS['border']};
+    border-radius: 8px;
+    background-color: {COLORS['background']};
+    top: -1px;
+}}
+
+QTabBar::tab {{
+    background-color: {COLORS['surface']};
+    color: {COLORS['text_dim']};
+    border: 1px solid {COLORS['border']};
+    border-bottom: none;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    padding: 10px 20px;
+    margin-right: 4px;
+    font-weight: bold;
+}}
+
+QTabBar::tab:selected {{
+    background-color: {COLORS['background']};
+    color: {COLORS['accent']};
+    border-bottom: 2px solid {COLORS['accent']};
+}}
+
+QTabBar::tab:hover {{
+    background-color: {COLORS['surface_light']};
+}}
+
 QMessageBox {{
     background-color: {COLORS['surface']};
 }}

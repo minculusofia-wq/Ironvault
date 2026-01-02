@@ -39,42 +39,57 @@ class ControlPanel(QFrame):
     
     def _setup_ui(self):
         layout = QVBoxLayout(self)
+        layout.setSpacing(20)
+        layout.setContentsMargins(30, 30, 30, 30)
         
-        top_row = QHBoxLayout()
+        # Section 1: Configuration
+        from PySide6.QtWidgets import QLabel, QGroupBox
+        config_group = QGroupBox("Configuration & Accès")
+        config_layout = QVBoxLayout(config_group)
+        config_layout.setSpacing(15)
         
-        self._load_config_btn = QPushButton("📁 Charger Config")
+        self._load_config_btn = QPushButton("📁 Charger Fichier JSON")
         self._load_config_btn.clicked.connect(self._on_load_config)
-        top_row.addWidget(self._load_config_btn)
+        config_layout.addWidget(self._load_config_btn)
         
-        self._credentials_btn = QPushButton("🔐 Credentials")
+        self._credentials_btn = QPushButton("🔐 Déverrouiller le Vault")
         self._credentials_btn.clicked.connect(self._on_credentials)
-        top_row.addWidget(self._credentials_btn)
+        config_layout.addWidget(self._credentials_btn)
         
-        self._launch_btn = QPushButton("▶️ Lancer")
+        layout.addWidget(config_group)
+        
+        # Section 2: Commandes de Bord
+        ops_group = QGroupBox("Commandes Opérationnelles")
+        ops_layout = QVBoxLayout(ops_group)
+        ops_layout.setSpacing(15)
+        
+        self._launch_btn = QPushButton("🚀 DÉMARRER LE BOT")
         self._launch_btn.setProperty("class", "launch")
         self._launch_btn.clicked.connect(self._on_launch)
-        top_row.addWidget(self._launch_btn)
+        ops_layout.addWidget(self._launch_btn)
         
-        layout.addLayout(top_row)
-        
-        bottom_row = QHBoxLayout()
-        
-        self._pause_btn = QPushButton("⏸️ Pause")
+        pause_row = QHBoxLayout()
+        self._pause_btn = QPushButton("⏸️ PAUSE")
         self._pause_btn.setProperty("class", "pause")
         self._pause_btn.clicked.connect(self._on_pause)
-        bottom_row.addWidget(self._pause_btn)
+        pause_row.addWidget(self._pause_btn)
         
-        self._resume_btn = QPushButton("▶️ Reprendre")
+        self._resume_btn = QPushButton("▶️ REPRENDRE")
         self._resume_btn.setProperty("class", "launch")
         self._resume_btn.clicked.connect(self._on_resume)
-        bottom_row.addWidget(self._resume_btn)
+        pause_row.addWidget(self._resume_btn)
+        ops_layout.addLayout(pause_row)
         
-        self._emergency_btn = QPushButton("🛑 ARRÊT D'URGENCE")
+        layout.addWidget(ops_group)
+        
+        layout.addStretch()
+        
+        # Section 3: Urgence
+        self._emergency_btn = QPushButton("🛑 ARRÊT D'URGENCE TOTAL")
         self._emergency_btn.setProperty("class", "danger")
+        self._emergency_btn.setFixedHeight(50)
         self._emergency_btn.clicked.connect(self._on_emergency_stop)
-        bottom_row.addWidget(self._emergency_btn)
-        
-        layout.addLayout(bottom_row)
+        layout.addWidget(self._emergency_btn)
     
     def _on_load_config(self):
         """Handle load config button click."""

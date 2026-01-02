@@ -24,6 +24,11 @@ Bot de trading automatisé sécurisé avec interface graphique.
 - **Hot-Reload de Configuration**: Chargez de nouveaux réglages ou changez de mode (Paper/Live) sans redémarrer le bot.
 - **Gestion Sécurisée des Credentials**: Clés API stockées en mémoire uniquement via un Vault chiffré.
 - **Support macOS natif**: Support SSL corrigé via `certifi`.
+- **Moteur Intelligent (v2.1)**: Spread dynamique basé sur l'imbalance du carnet et sizing optimisé par liquidité.
+- **Filtre de Volatilité**: Protection automatique contre les mouvements de prix extrêmes.
+- **Persistance des Performances**: Historique complet des trades stocké localement via SQLite.
+- **Interface à Onglets Moderne**: Séparation claire entre le Monitoring (Dashboard) et la Configuration (Settings).
+- **Visualiseur Carnet d'Ordres**: Graphique de profondeur en temps réel pour une vue directe sur le marché.
 
 
 ## 📁 Structure du Projet
