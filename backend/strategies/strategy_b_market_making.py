@@ -14,6 +14,7 @@ from ..websocket_client import WebSocketClient
 from ..live_orderbook import LiveOrderBook
 from ..performance_tracker import PerformanceTracker, TradeRecord
 from ..volatility_filter import VolatilityFilter
+from ..market_data import GammaClient
 from typing import Any
 import time
 
@@ -32,6 +33,7 @@ class StrategyBMarketMaking(BaseStrategy):
         audit_logger: AuditLogger,
         clob_adapter: ClobAdapter,
         websocket_client: WebSocketClient,
+        market_data: GammaClient,
         performance_tracker: PerformanceTracker | None = None,
         volatility_filter: VolatilityFilter | None = None
     ):
@@ -43,6 +45,7 @@ class StrategyBMarketMaking(BaseStrategy):
         self._audit = audit_logger
         self._clob_adapter = clob_adapter
         self._ws_client = websocket_client
+        self._market_data = market_data
         self._performance = performance_tracker
         self._volatility = volatility_filter
         
@@ -157,13 +160,53 @@ class StrategyBMarketMaking(BaseStrategy):
 
     async def process_tick(self) -> None:
         """
-        Process tick: Reconcile active orders with desired state.
+        Process tick: Discover markets, subscribe, and reconcile orders.
         """
         if self._state != StrategyState.ACTIVE:
             return
 
-        # 1. Reconciliation Loop
-        # Iterate over all markets we are tracking / quoting
+        # 1. Market Discovery (Top 10 most liquid markets via Gamma)
+        try:
+            # Throttle discovery to once every 60 seconds to avoid API spam
+            now = time.time()
+            if not hasattr(self, "_last_discovery") or now - self._last_discovery > 60:
+                events = await self._market_data.get_events(limit=20)
+                
+                discovered_tokens = []
+                for event in events:
+                    markets = event.get("markets", [])
+                    for market in markets:
+                        if market.get("active") and market.get("acceptingOrders"):
+                            try:
+                                tids = market.get("clobTokenIds")
+                                if tids:
+                                    if isinstance(tids, str):
+                                        import json
+                                        tids = json.loads(tids)
+                                    discovered_tokens.extend(tids)
+                            except Exception:
+                                continue
+                    
+                    # Sort by volume or just take top 10
+                    target_tokens = discovered_tokens[:10]
+                    
+                    # 2. Dynamic Subscription
+                    for tid in target_tokens:
+                        if tid not in self._live_books:
+                            await self._ws_client.subscribe_orderbook(tid, self._on_book_update)
+                            self._live_books[tid] = LiveOrderBook(tid)
+                            self._audit.log_strategy_event(self._name, "DYNAMIC_SUBSCRIPTION", {"token": tid})
+                    
+                    self._last_discovery = now
+
+        except Exception as e:
+            self._audit.log_error("STRATEGY_B_DISCOVERY_ERROR", str(e))
+
+        if not self._live_books:
+            self._audit.log_strategy_event(self._name, "IDLE_NO_MARKETS", {"active_books": 0})
+            return
+
+        # 3. Reconciliation Loop
         for market_id, book in self._live_books.items():
             try:
                 snapshot = book.get_snapshot()
@@ -192,36 +235,51 @@ class StrategyBMarketMaking(BaseStrategy):
         
         imbalance = (bid_vol - ask_vol) / total_vol if total_vol > 0 else 0
         
-        # Adjust spread based on imbalance
-        # If imbalance > 0.5, we shift prices up (more demand)
-        # If imbalance < -0.5, we shift prices down (more supply)
-        # We'll use a simple shift factor
-        shift_factor = imbalance * 0.002 # Max 0.2% shift
+        # v2.5 Inventory Skew
+        # If we have a long position (pos > 0), we want to sell more and buy less.
+        # We lower BOTH prices to stay competitive on ask and avoid buying more.
+        pos = self._positions.get(market_id, 0.0)
+        # Ratio of position vs max allowed exposure
+        inventory_ratio = pos / self._config.max_exposure if self._config.max_exposure > 0 else 0
+        # Max skew of 0.5% (50 bps)
+        skew_bps = inventory_ratio * 0.005 
+        
+        # Shift prices down if long (pos > 0), up if short (pos < 0)
+        # Note: In binary markets, pos is usually shares of 'YES'.
+        inventory_shift = -skew_bps * mid 
         
         base_spread = max(self._config.spread_min, 0.01)
         
-        buy_price = mid * (1 - base_spread / 2 + shift_factor)
-        sell_price = mid * (1 + base_spread / 2 + shift_factor)
+        # v2.5 Imbalance-based price shift (up to 0.1%)
+        shift_factor = imbalance * 0.001
         
-        # Volatility Check
-        if self._volatility:
-            self._volatility.update_price(market_id, mid)
-            if not self._volatility.is_safe(market_id):
-                # If volatile, widen spread significantly or stop quoting
-                buy_price *= 0.99
-                sell_price *= 1.01
+        buy_price = mid * (1 - base_spread / 2 + shift_factor) + inventory_shift
+        sell_price = mid * (1 + base_spread / 2 + shift_factor) + inventory_shift
         
         # Rounding (Important for CLOB) - simplified here
         buy_price = round(buy_price, 6)
         sell_price = round(sell_price, 6)
         
         # 2. Reconcile BUY Side
-        await self._reconcile_side(market_id, "BUY", buy_price)
+        await self._reconcile_side(market_id, "BUY", buy_price, book)
         
         # 3. Reconcile SELL Side
-        await self._reconcile_side(market_id, "SELL", sell_price)
+        await self._reconcile_side(market_id, "SELL", sell_price, book)
         
-    async def _reconcile_side(self, market_id: str, side: str, desired_price: float):
+    def on_order_fill(self, market_id: str, side: str, size: float, price: float):
+        """Update internal position on fill."""
+        current = self._positions.get(market_id, 0.0)
+        if side.upper() == "BUY":
+            self._positions[market_id] = current + size
+        else:
+            self._positions[market_id] = current - size
+        
+        self._audit.log_strategy_event(self._name, "POSITION_UPDATE", {
+            "market": market_id,
+            "new_pos": self._positions[market_id]
+        })
+        
+    async def _reconcile_side(self, market_id: str, side: str, desired_price: float, book: Any):
         """
         Check existing order for side. If far from desired, cancel & replace.
         """
@@ -282,9 +340,9 @@ class StrategyBMarketMaking(BaseStrategy):
             
             self._active_quotes[market_id][f"{side}_order_id"] = new_id
             self._active_quotes[market_id][f"{side}_price"] = desired_price
-            
-            # Log
-            # self._audit.log_debug("REQUOTE", f"{side} {market_id} @ {desired_price}")
+            self._active_positions = len(self._active_quotes)
+            self._last_action = f"QUOTE: {side} {market_id[:6]}"
+            self._notify_status()
 
     def abort(self) -> None:
         """
@@ -317,16 +375,17 @@ class StrategyBMarketMaking(BaseStrategy):
     
     @property
     def live_orderbook_snapshots(self) -> dict[str, dict]:
-        """Get live snapshots of all tracked orderbooks."""
+        """Get live snapshots of all tracked orderbooks (Thread-safe copy)."""
         snapshots = {}
-        for market_id, book in self._live_books.items():
+        # Use list() to iterate over a copy of items to avoid RuntimeError if changed during iteration
+        for market_id, book in list(self._live_books.items()):
             snap = book.get_snapshot()
             if snap:
                 snapshots[market_id] = {
                     "bids": snap.bids[:10],
                     "asks": snap.asks[:10],
                     "midpoint": snap.midpoint,
-                    "spread_pct": snap.spread_pct
+                    "spread_pct": snap.spread_percent
                 }
         return snapshots
 

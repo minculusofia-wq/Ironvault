@@ -54,6 +54,11 @@ class MarketSnapshot:
         return (self.spread / mid) * 100
 
     @property
+    def spread_pct(self) -> float:
+        """Alias for spread_percent (backward compatibility with UI)."""
+        return self.spread_percent
+
+    @property
     def midpoint(self) -> float:
         if not self.bids and not self.asks:
             return 0.0
@@ -79,6 +84,10 @@ class ClobAdapter:
             connector = aiohttp.TCPConnector(ssl=ssl_context)
             self._session = aiohttp.ClientSession(connector=connector)
         return self._session
+
+    def set_session(self, session: aiohttp.ClientSession):
+        """Set shared session from orchestrator."""
+        self._session = session
 
     async def get_orderbook(self, token_id: str) -> Optional[MarketSnapshot]:
         """
@@ -201,6 +210,22 @@ class ClobAdapter:
                 return snapshot.best_ask
                 
         return 0.0
+
+    def decide_execution_strategy(self, snapshot: MarketSnapshot, side: str, max_taker_spread_pct: float = 1.0) -> Tuple[str, float]:
+        """
+        Decides whether to use Taker (immediate) or Maker (passive) execution.
+        Returns (order_type, price).
+        """
+        side = side.upper()
+        
+        if snapshot.spread_percent <= max_taker_spread_pct:
+            # Tight spread: Take liquidity
+            price = snapshot.best_ask if side == "BUY" else snapshot.best_bid
+            return "FOK", price
+        else:
+            # Wide spread: Join the book (Maker)
+            price = snapshot.best_bid if side == "BUY" else snapshot.best_ask
+            return "GTC", price
 
     def max_executable_size(self, snapshot: MarketSnapshot, side: str, slippage_pct: float) -> float:
         """

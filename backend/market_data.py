@@ -28,6 +28,10 @@ class GammaClient:
             self._session = aiohttp.ClientSession(connector=connector)
         return self._session
     
+    def set_session(self, session: aiohttp.ClientSession):
+        """Set shared session from orchestrator."""
+        self._session = session
+    
     async def close(self):
         """Close the session."""
         if self._session and not self._session.closed:

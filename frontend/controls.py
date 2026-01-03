@@ -27,6 +27,7 @@ class ControlPanel(QFrame):
     pause_requested = Signal()
     resume_requested = Signal()
     emergency_stop_requested = Signal()
+    safe_shutdown_requested = Signal()
     
     def __init__(self):
         super().__init__()
@@ -79,6 +80,12 @@ class ControlPanel(QFrame):
         self._resume_btn.clicked.connect(self._on_resume)
         pause_row.addWidget(self._resume_btn)
         ops_layout.addLayout(pause_row)
+        
+        self._shutdown_btn = QPushButton("🚪 FERMETURE SÉCURISÉE")
+        self._shutdown_btn.setFixedHeight(40)
+        self._shutdown_btn.setProperty("class", "pause")
+        self._shutdown_btn.clicked.connect(self._on_shutdown)
+        ops_layout.addWidget(self._shutdown_btn)
         
         layout.addWidget(ops_group)
         
@@ -135,6 +142,10 @@ class ControlPanel(QFrame):
         
         if reply == QMessageBox.StandardButton.Yes:
             self.emergency_stop_requested.emit()
+            
+    def _on_shutdown(self):
+        """Handle safe shutdown request."""
+        self.safe_shutdown_requested.emit()
     
     def _update_button_states(self):
         """Update button enabled states based on current bot state."""
@@ -143,18 +154,31 @@ class ControlPanel(QFrame):
         is_paused = self._bot_state == "PAUSED"
         is_killed = self._bot_state == "KILLED"
         
+        # Load Config Button
         self._load_config_btn.setEnabled(not is_killed)
+        
+        # Credentials Button
         self._credentials_btn.setEnabled(is_idle)
         
+        # Launch Button Logic & Tooltips
         # Launch requires config AND (vault unlocked OR paper trading)
         can_launch = is_idle and self._config_loaded and (self._vault_unlocked or self._paper_trading)
         self._launch_btn.setEnabled(can_launch)
         
+        if not is_idle:
+            self._launch_btn.setToolTip("Le bot est déjà en cours d'exécution.")
+        elif not self._config_loaded:
+            self._launch_btn.setToolTip("Veuillez charger une configuration d'abord.")
+        elif not (self._vault_unlocked or self._paper_trading):
+            self._launch_btn.setToolTip("Veuillez déverrouiller le vault ou activer le paper trading.")
+        else:
+            self._launch_btn.setToolTip("Prêt à démarrer.")
+        
+        # Pause/Resume/Stop
         self._pause_btn.setEnabled(is_running)
-        
         self._resume_btn.setEnabled(is_paused)
-        
         self._emergency_btn.setEnabled(not is_killed and not is_idle)
+        self._shutdown_btn.setEnabled(not is_killed)
     
     @Slot(str)
     def set_bot_state(self, state: str):

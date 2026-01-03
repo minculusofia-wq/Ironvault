@@ -58,7 +58,26 @@ class MainWindow(QMainWindow):
         
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
-        self._status_bar.showMessage("Prêt - Charger config et déverrouiller vault pour commencer")
+        self._status_bar.showMessage("Initiating system check...")
+        
+        # Run diagnostics after UI is shown
+        QTimer.singleShot(1000, self._run_startup_diagnostics)
+
+    def _run_startup_diagnostics(self):
+        """Run initial system checks."""
+        # 1. Check styles
+        try:
+            # Re-apply stylesheet to ensure it "takes"
+            self.setStyleSheet(self.styleSheet())
+        except Exception:
+            pass
+            
+        # 2. Check Orchestrator Health
+        if not self._orchestrator:
+             self._status_bar.showMessage("CRITICAL: Backend Orchestrator Failed!")
+             return
+
+        self._status_bar.showMessage("Système prêt - Chargez une config pour commencer")
     
     def _connect_signals(self):
         """Connect control signals to handlers."""
@@ -68,6 +87,7 @@ class MainWindow(QMainWindow):
         self._controls.pause_requested.connect(self._on_pause)
         self._controls.resume_requested.connect(self._on_resume)
         self._controls.emergency_stop_requested.connect(self._on_emergency_stop)
+        self._controls.safe_shutdown_requested.connect(self._handle_safe_shutdown)
         
         self._orchestrator.subscribe_state(self._on_bot_state_changed)
     
@@ -213,6 +233,14 @@ class MainWindow(QMainWindow):
         """Handle emergency stop request."""
         success, message = self._orchestrator.emergency_stop()
         self._status_bar.showMessage(f"🛑 {message}")
+        
+    @Slot()
+    def _handle_safe_shutdown(self):
+        """Perform safe shutdown and exit application."""
+        self._status_bar.showMessage("Fermeture sécurisée en cours...")
+        # Orchestrator shutdown does cleanup, cancels orders, stops threads, locks vault
+        self._orchestrator.shutdown()
+        self.close()
     
     def _on_bot_state_changed(self, state: BotState):
         """Handle bot state change from orchestrator."""
@@ -236,69 +264,86 @@ class MainWindow(QMainWindow):
     @Slot()
     def _update_ui(self):
         """Periodic UI update from orchestrator state."""
-        # 1. Update Global Bot State
-        current_state = self._orchestrator.state
-        self._controls.set_bot_state(current_state.value)
-        self._dashboard.system_panel.update_bot_state(current_state.value)
+        try:
+            # v2.5 UI Pulse for diagnostic
+            self._tick_count = getattr(self, "_tick_count", 0) + 1
+            pulse_char = "●" if self._tick_count % 2 == 0 else "○"
+            self.setWindowTitle(f"🏦 {pulse_char} IRONVAULT - Trading Bot [v2.5]")
 
-        # 2. Update Configuration Status
-        is_config_loaded = self._orchestrator.is_config_loaded
-        self._controls.set_config_loaded(is_config_loaded)
-        
-        if is_config_loaded:
-            is_paper = self._orchestrator._config.market.paper_trading
-            self._controls.set_paper_trading(is_paper)
-        else:
-            self._controls.set_paper_trading(False)
+            # 1. Update Global Bot State
+            current_state = self._orchestrator.state
+            self._controls.set_bot_state(current_state.value)
+            self._dashboard.system_panel.update_bot_state(current_state.value)
+    
+            # 2. Update Configuration Status
+            is_config_loaded = self._orchestrator.is_config_loaded
+            self._controls.set_config_loaded(is_config_loaded)
+            
+            if is_config_loaded:
+                is_paper = self._orchestrator._config.market.paper_trading
+                self._controls.set_paper_trading(is_paper)
+            else:
+                self._controls.set_paper_trading(False)
+    
+            # 3. Update Vault/Credentials Status
+            creds_status = self._orchestrator.credentials_status
+            is_unlocked = creds_status.vault_loaded
+            self._controls.set_vault_unlocked(is_unlocked)
+            self._dashboard.system_panel.update_vault_status(is_unlocked)
+    
+            # 4. Update Capital & Strategy Status
+            capital = self._orchestrator.capital_state
+            if capital:
+                self._dashboard.capital_panel.update_capital(
+                    capital.total,
+                    capital.free,
+                    capital.locked_a,
+                    capital.locked_b
+                )
+            
+            status_a = self._orchestrator.strategy_a_status
+            if status_a:
+                self._dashboard.strategy_a_panel.update_status(
+                    status_a.state.value,
+                    status_a.locked_capital,
+                    status_a.active_positions,
+                    status_a.last_action
+                )
+            
+            status_b = self._orchestrator.strategy_b_status
+            if status_b:
+                self._dashboard.strategy_b_panel.update_status(
+                    status_b.state.value,
+                    status_b.locked_capital,
+                    status_b.active_positions,
+                    status_b.last_action
+                )
+            
+            # 5. Update Performance Stats (Caché - v2.5)
+            stats = self._orchestrator.performance_stats
+            if stats:
+                self._dashboard.performance_panel.update_stats(stats)
+            
+            # 6. Update Orderbook Visualizer
+            snapshots = self._orchestrator.live_orderbook_snapshots
+            if snapshots:
+                keys = list(snapshots.keys())
+                if keys:
+                    first_market = snapshots[keys[0]]
+                    self._dashboard.orderbook_panel.update_data(first_market)
+            
+            ks_status = self._orchestrator.kill_switch_status
+            if ks_status:
+                self._dashboard.system_panel.update_kill_switch(ks_status["active"])
 
-        # 3. Update Vault/Credentials Status
-        creds_status = self._orchestrator.credentials_status
-        is_unlocked = creds_status.vault_loaded
-        self._controls.set_vault_unlocked(is_unlocked)
-        self._dashboard.system_panel.update_vault_status(is_unlocked)
+            # 7. Status bar heartbeat
+            if current_state == BotState.RUNNING:
+                self._status_bar.showMessage(f"✓ Bot Actif - Pulse {self._tick_count}", 2000)
 
-        # 4. Update Capital & Strategy Status
-        capital = self._orchestrator.capital_state
-        if capital:
-            self._dashboard.capital_panel.update_capital(
-                capital.total,
-                capital.free,
-                capital.locked_a,
-                capital.locked_b
-            )
-        
-        status_a = self._orchestrator.strategy_a_status
-        if status_a:
-            self._dashboard.strategy_a_panel.update_status(
-                status_a.state.value,
-                status_a.locked_capital,
-                status_a.active_positions,
-                status_a.last_action
-            )
-        
-        status_b = self._orchestrator.strategy_b_status
-        if status_b:
-            self._dashboard.strategy_b_panel.update_status(
-                status_b.state.value,
-                status_b.locked_capital,
-                status_b.active_positions,
-                status_b.last_action
-            )
-        
-        # 5. Update Performance Stats (v2.0)
-        stats = self._orchestrator.performance_stats
-        self._dashboard.performance_panel.update_stats(stats)
-        
-        # 6. Update Orderbook Visualizer
-        snapshots = self._orchestrator.live_orderbook_snapshots
-        if snapshots:
-            # For now, display the first available market
-            first_market = next(iter(snapshots.values()))
-            self._dashboard.orderbook_panel.update_data(first_market)
-        
-        ks_status = self._orchestrator.kill_switch_status
-        if ks_status:
-            self._dashboard.system_panel.update_kill_switch(ks_status["active"])
+        except Exception as e:
+            # Prevent silent failure from killing the timer
+            print(f"DEBUG: UI Update Error: {e}")
+            self._status_bar.showMessage(f"⚠️ Erreur UI: {str(e)[:50]}")
     
 
 

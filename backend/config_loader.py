@@ -22,12 +22,10 @@ class CapitalConfig:
 class StrategyAConfig:
     enabled: bool
     name: str
-    max_events: int
-    min_odds: float
-    max_events: int
-    min_odds: float
-    max_odds: float
-    trade_size_percent: float = 1.0  # Default 1%
+    max_events: int = 5
+    trade_size_percent: float = 1.0
+    min_volume: float = 1000.0  # Used for filtering initial discovery
+    latency_target_ms: int = 50 # Desired max latency for triggers
 
 
 @dataclass
@@ -79,7 +77,7 @@ class ConfigLoader:
     
     REQUIRED_KEYS = {
         'capital': ['total', 'max_allocation_strategy_a', 'max_allocation_strategy_b'],
-        'strategy_a': ['enabled', 'name', 'max_events', 'min_odds', 'max_odds', 'trade_size_percent'],
+        'strategy_a': ['enabled', 'name', 'trade_size_percent'],
         'strategy_b': ['enabled', 'name', 'spread_min', 'spread_max', 'max_exposure', 'trade_size_percent'],
         'risk': ['max_drawdown_percent', 'max_daily_loss', 'kill_switch_threshold'],
         'market': ['connection_timeout_seconds', 'heartbeat_interval_seconds', 'paper_trading']
@@ -143,10 +141,7 @@ class ConfigLoader:
             )
         
         strategy_a = data['strategy_a']
-        if strategy_a['min_odds'] >= strategy_a['max_odds']:
-            raise ConfigValidationError("strategy_a.min_odds must be less than max_odds")
-        
-        if not (0 < strategy_a['trade_size_percent'] <= 100):
+        if not (0 < strategy_a.get('trade_size_percent', 0) <= 100):
             raise ConfigValidationError("strategy_a.trade_size_percent must be between 0 and 100")
         
         strategy_b = data['strategy_b']
@@ -202,9 +197,14 @@ class ConfigLoader:
             paper_trading=market_data.get('paper_trading', False)
         )
         
+        # Handle optional config fields that might be missing in older configs
+        strat_a_data = data['strategy_a'].copy()
+        if 'min_volume' not in strat_a_data:
+            strat_a_data['min_volume'] = 1000.0
+
         return BotConfig(
             capital=CapitalConfig(**data['capital']),
-            strategy_a=StrategyAConfig(**data['strategy_a']),
+            strategy_a=StrategyAConfig(**strat_a_data),
             strategy_b=StrategyBConfig(**data['strategy_b']),
             risk=RiskConfig(**data['risk']),
             market=market_config,

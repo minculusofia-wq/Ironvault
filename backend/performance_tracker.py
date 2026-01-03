@@ -95,7 +95,18 @@ class PerformanceTracker:
             self._audit.log_error("DB_RECORD_TRADE_ERROR", str(e))
     
     def get_summary_stats(self, strategy: Optional[str] = None) -> dict[str, Any]:
-        """Calculate summary statistics from trade history."""
+        """Calculate summary statistics with simple caching to prevent UI freeze."""
+        now = time.time()
+        
+        # Use simple cache if query is the same and recent
+        cache_key = strategy or "GLOBAL"
+        if not hasattr(self, "_stats_cache"):
+            self._stats_cache = {}
+            
+        cached = self._stats_cache.get(cache_key)
+        if cached and (now - cached["time"] < 5.0):
+            return cached["data"]
+
         try:
             conn = sqlite3.connect(self._db_path)
             cursor = conn.cursor()
@@ -120,12 +131,16 @@ class PerformanceTracker:
             
             conn.close()
             
-            return {
+            data = {
                 "total_trades": count or 0,
                 "total_pnl": total_pnl or 0.0,
                 "avg_pnl": avg_pnl or 0.0,
                 "win_rate": win_rate
             }
+            
+            self._stats_cache[cache_key] = {"time": now, "data": data}
+            return data
+            
         except Exception as e:
             self._audit.log_error("DB_STATS_SUMMARY_ERROR", str(e))
             return {"error": str(e)}

@@ -9,6 +9,10 @@ from typing import Callable
 import threading
 import asyncio
 import time
+import aiohttp
+import json
+import ssl
+import certifi
 
 from .config_loader import BotConfig, ConfigLoader
 from .capital_manager import CapitalManager
@@ -21,8 +25,9 @@ from .market_data import GammaClient
 from .clob_adapter import ClobAdapter
 from .websocket_client import WebSocketClient
 from .strategies.base_strategy import StrategyStatus
-from .strategies.strategy_a_dutching import StrategyADutching
+from .strategies.strategy_a_front_running import StrategyAFrontRunning
 from .strategies.strategy_b_market_making import StrategyBMarketMaking
+from .scoreboard_monitor import ScoreboardMonitor
 from .performance_tracker import PerformanceTracker, TradeRecord
 from .volatility_filter import VolatilityFilter
 
@@ -55,13 +60,16 @@ class Orchestrator:
         self._execution: ExecutionEngine | None = None
         self._kill_switch: KillSwitch | None = None
         
-        self._strategy_a: StrategyADutching | None = None
+        self._strategy_a: StrategyAFrontRunning | None = None
+        self._scoreboard = ScoreboardMonitor(self._audit)
         self._strategy_b: StrategyBMarketMaking | None = None
         
         self._performance: PerformanceTracker | None = None
         self._volatility: VolatilityFilter | None = None
         
         self._ws_client: WebSocketClient | None = None
+        self._session: aiohttp.ClientSession | None = None
+        self._performance_results = {} # v2.5 UI Cache
         
         self._heartbeat_thread: threading.Thread | None = None
         self._heartbeat_running = False
@@ -69,6 +77,33 @@ class Orchestrator:
         
         self._state_callbacks: list[Callable[[BotState], None]] = []
         self._lock = threading.Lock()
+
+    def check_connections(self) -> dict:
+        """
+        Diagnostic check for external connections.
+        Returns a dict of component -> status (bool).
+        """
+        results = {
+            "gamma_api": False,
+            "clob_api": False,
+            "internet": False
+        }
+        
+        try:
+            # Simple socket check to Google DNS for generic internet
+            import socket
+            sock = socket.create_connection(("8.8.8.8", 53), timeout=3)
+            sock.close()
+            results["internet"] = True
+        except Exception as e:
+            self._audit.log_error("DIAG_INTERNET_FAIL", str(e))
+            
+        # We don't check API endpoints here to avoid calling paid/rate-limited APIs on every startup
+        # but we could check if client objects are initialized
+        results["gamma_api"] = self._market_data is not None
+        results["clob_api"] = self._clob_adapter is not None
+        
+        return results
     
     def load_config(self, file_path: str) -> tuple[bool, str]:
         """
@@ -145,6 +180,7 @@ class Orchestrator:
         )
         
         # Initialize Market Data
+        # Shared sessions will be provided during heartbeat loop entry
         self._market_data = GammaClient(self._config.market.gamma_api_url, self._audit)
         self._clob_adapter = ClobAdapter(self._config.market.clob_api_url)
         
@@ -165,14 +201,13 @@ class Orchestrator:
             )
             self._execution.subscribe_status(self._on_execution_status_link)
         
-        self._strategy_a = StrategyADutching(
+        self._strategy_a = StrategyAFrontRunning(
             config=self._config.strategy_a,
             capital_manager=self._capital,
             execution_engine=self._execution,
             audit_logger=self._audit,
-            market_data=self._market_data,
             clob_adapter=self._clob_adapter,
-            performance_tracker=self._performance,
+            scoreboard_monitor=self._scoreboard,
             volatility_filter=self._volatility
         )
         
@@ -183,6 +218,7 @@ class Orchestrator:
             audit_logger=self._audit,
             clob_adapter=self._clob_adapter,
             websocket_client=self._ws_client,
+            market_data=self._market_data,
             performance_tracker=self._performance,
             volatility_filter=self._volatility
         )
@@ -278,12 +314,26 @@ class Orchestrator:
                 )
                 self._performance.record_trade(trade)
                 self._audit.log_strategy_event(order.strategy, "TRADE_RECORDED_PERSISTENTLY", {"id": order.order_id})
+                
+                # Dispatch fill to strategy
+                if order.strategy == "Strategy_A_Dutching" and self._strategy_a:
+                     # Strategy A might not need position tracking as much, but B does
+                     pass
+                elif order.strategy == "Strategy_B_MarketMaking" and self._strategy_b:
+                     self._strategy_b.on_order_fill(
+                         market_id=p.get('token_id'),
+                         side=p.get('side'),
+                         size=float(p.get('size', 0)),
+                         price=float(p.get('price', 0))
+                     )
             except Exception as e:
                 self._audit.log_error("TRADE_RECORD_FAILED", f"Error mapping order to TradeRecord: {e}")
 
     def shutdown(self) -> None:
         """Clean shutdown of application."""
         self._stop_heartbeat()
+        if self._scoreboard:
+            asyncio.run_coroutine_threadsafe(self._scoreboard.stop(), asyncio.get_event_loop())
         if self._execution:
             self._execution.disable()
         if self._credentials:
@@ -311,13 +361,27 @@ class Orchestrator:
         
         while self._heartbeat_running:
             try:
-                # 1. Ensure WebSocket is connected (Auto-Reconnect)
+                # v2.5 Centralized Session Management
+                if self._session is None or self._session.closed:
+                    import ssl
+                    import certifi
+                    ssl_context = ssl.create_default_context(cafile=certifi.where())
+                    connector = aiohttp.TCPConnector(ssl=ssl_context)
+                    self._session = aiohttp.ClientSession(connector=connector)
+                    
+                    # Inject into components
+                    if self._market_data: self._market_data.set_session(self._session)
+                    if self._clob_adapter: self._clob_adapter.set_session(self._session)
+                
+                # 2. Start WebSocket Manager and Scoreboard if not running
                 if self._ws_client and not self._ws_client._running:
                     try:
-                        await self._ws_client.connect()
+                        await self._ws_client.start()
                     except Exception as e:
-                        # Log error but don't stop the loop
-                        self._audit.log_error("WS_AUTO_RECONNECT_FAILED", str(e))
+                        self._audit.log_error("WS_MANAGER_START_FAILED", str(e))
+                
+                if self._scoreboard and not self._scoreboard._running:
+                    await self._scoreboard.start()
                 
                 # 2. Ensure Execution Engine is enabled
                 if self._execution and not self._execution.is_enabled:
@@ -326,9 +390,6 @@ class Orchestrator:
                     except Exception as e:
                         self._audit.log_error("EXECUTION_RE_ENABLE_FAILED", str(e))
 
-                # 3. Wait for interval
-                await asyncio.sleep(interval)
-                
                 # 4. Process Strategy Ticks
                 if self._state == BotState.RUNNING:
                     self._last_heartbeat = time.time()
@@ -345,13 +406,25 @@ class Orchestrator:
                     if tasks:
                         # Use a timeout for strategy ticks to avoid hanging the loop
                         try:
-                            await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=interval * 2)
+                            # 2.5 Dynamic tick timeout: shorter of interval*2 or 10s
+                            tick_timeout = min(interval * 2, 10.0)
+                            await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=tick_timeout)
                         except asyncio.TimeoutError:
-                            self._audit.log_error("STRATEGY_TICK_TIMEOUT", f"Ticks took longer than {interval*2}s")
+                            self._audit.log_error("STRATEGY_TICK_TIMEOUT", f"Ticks exceeded {tick_timeout}s")
+                            
+                    # 5. Background Task: Update Performance Results for UI (Offloaded from UI thread)
+                    if self._performance:
+                        self._performance_results = self._performance.get_summary_stats()
+                            
             except Exception as e:
                 self._audit.log_error("HEARTBEAT_LOOP_TICK_ERROR", str(e))
+            
+            # 5. Always wait for interval even on error to prevent CPU hogging
+            await asyncio.sleep(interval)
         
-        # Cleanup when loop stops
+        if self._scoreboard:
+            asyncio.create_task(self._scoreboard.stop())
+            
         if self._ws_client:
             await self._ws_client.disconnect()
             
@@ -413,10 +486,8 @@ class Orchestrator:
 
     @property
     def performance_stats(self) -> dict:
-        """Get global performance stats."""
-        if self._performance:
-            return self._performance.get_summary_stats()
-        return {}
+        """Get cached performance stats (Thread-safe for UI)."""
+        return self._performance_results or {}
 
     @property
     def strategy_a_status(self) -> StrategyStatus | None:

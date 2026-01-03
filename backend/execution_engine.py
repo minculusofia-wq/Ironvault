@@ -92,16 +92,21 @@ class ExecutionEngine:
             
     def _init_client(self):
         """Initialize CLOB client (Sync) - to be used in executor."""
+        # Reset client if exists to allow fresh start
+        self._clob_client = None
+
         if getattr(self, '_paper_trading', False):
              self._audit.log_system_event("EXECUTION_ENGINE_INIT", {"mode": "PAPER_TRADING"})
              return
 
         if not self._credentials or not self._credentials.is_unlocked:
+            self._audit.log_error("CLOB_INIT_ERROR", "Credentials not unlocked")
             return
 
         try:
             creds = self._credentials.get_polymarket_credentials()
             if not creds:
+                self._audit.log_error("CLOB_INIT_ERROR", "Failed to retrieve Polymarket credentials")
                 return
 
             self._clob_client = ClobClient(
@@ -116,7 +121,7 @@ class ExecutionEngine:
             )
             self._audit.log_system_event("CLOB_CLIENT_INITIALIZED", {"host": self._host})
         except Exception as e:
-            self._audit.log_error("CLOB_INIT_ERROR", str(e))
+            self._audit.log_error("CLOB_INIT_ERROR", f"Exception during init: {str(e)}")
             self._clob_client = None
     
     def disable(self) -> None:
