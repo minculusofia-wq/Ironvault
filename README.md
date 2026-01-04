@@ -41,11 +41,25 @@ Bot de trading automatisé sécurisé avec interface graphique pour Polymarket.
 - **Batch sizes**: 25 marchés par batch (market scanner), 20 tokens (price monitor)
 - **Délais réduits**: 20ms entre batches (vs 100ms précédemment)
 - **Timeout API**: 2s (vs 5s) pour une détection d'erreur rapide
+- **orjson**: JSON parsing 3-10x plus rapide
+- **uvloop**: Event loop optimisé (Linux/macOS)
+
+### WebSocket Polymarket
+- **Format subscription correct**: `{type: "market", assets_ids: [...]}`
+- **Multi-event support**: `book`, `price_change`
+- **Fallback REST API**: Si WebSocket stale >30s, fetch via CLOB API
+- **Gestion messages vides**: Skip silencieux des keep-alive/ping
+
+### Robustesse
+- **Log rotation**: 10MB par fichier, 5 backups max, 100MB total
+- **Auto-cleanup**: Suppression des vieux logs au démarrage
+- **Error handling**: Gestion gracieuse des erreurs JSON et réseau
 
 ### Précision Paper Trading
 - **Slippage basé sur profondeur**: `base + (size/100) * factor + noise`
-- **Latence réaliste**: 20-100ms
-- **Fill probability**: 95%
+- **Latence réaliste**: 30-150ms
+- **Fill probability**: 92%
+- **Partial fills**: 10% de chance
 
 ### Nouveaux Composants
 - **MarketScanner**: Scoring multi-facteurs (volume, spread, depth, activité)
