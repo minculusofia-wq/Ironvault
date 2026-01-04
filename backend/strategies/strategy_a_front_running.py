@@ -87,14 +87,14 @@ class StrategyAFrontRunning(BaseStrategy):
 
         # v3.0: Trigger deduplication cache
         self._last_trigger_time: Dict[str, float] = {}
-        self._trigger_cooldown = 5.0  # 5 seconds between same token triggers
+        self._trigger_cooldown = getattr(config, 'trigger_cooldown_seconds', 5.0)
 
         # v3.0: Orderbook cache for reduced API calls
         self._book_cache: Dict[str, tuple] = {}  # token_id -> (timestamp, snapshot)
-        self._book_cache_ttl = 0.15  # 150ms TTL
+        self._book_cache_ttl = getattr(config, 'orderbook_cache_ttl_ms', 150) / 1000.0
 
         # v2.5: Dynamic exit configuration
-        self._exit_config = {
+        self._exit_config = getattr(config, 'exit_config', None) or {
             'profit_target_pct': 2.0,      # Exit at +2% profit
             'stop_loss_pct': 1.0,          # Exit at -1% loss
             'trailing_stop_pct': 0.5,      # Trail by 0.5% from high

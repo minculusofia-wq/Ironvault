@@ -81,7 +81,7 @@ class StrategyBMarketMaking(BaseStrategy):
         self._pending_orders: list[str] = []
 
         # v2.5: Dynamic spread configuration
-        self._spread_config = {
+        self._spread_config = getattr(config, 'spread_config', None) or {
             'base_spread': 0.02,              # 2% base spread
             'min_spread': 0.005,              # 0.5% minimum spread
             'max_spread': 0.10,               # 10% maximum spread
@@ -92,7 +92,7 @@ class StrategyBMarketMaking(BaseStrategy):
         }
 
         # v2.5: Multi-market configuration
-        self._market_config = {
+        self._market_config = getattr(config, 'market_config', None) or {
             'max_markets': 50,                # Maximum markets to monitor
             'discovery_interval': 30,         # Seconds between market discovery
             'min_volume_24h': 1000,           # Minimum 24h volume in USD

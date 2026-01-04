@@ -25,7 +25,12 @@ class StrategyAConfig:
     max_events: int = 5
     trade_size_percent: float = 1.0
     min_volume: float = 1000.0  # Used for filtering initial discovery
-    latency_target_ms: int = 50 # Desired max latency for triggers
+    latency_target_ms: int = 50  # Desired max latency for triggers
+    min_odds: float = 1.01  # Minimum odds threshold
+    max_odds: float = 100.0  # Maximum odds threshold
+    exit_config: dict | None = None  # Dynamic exit configuration
+    trigger_cooldown_seconds: float = 5.0  # Cooldown between triggers
+    orderbook_cache_ttl_ms: int = 150  # Orderbook cache TTL in ms
 
 
 @dataclass
@@ -34,10 +39,10 @@ class StrategyBConfig:
     name: str
     spread_min: float
     spread_max: float
-    spread_min: float
-    spread_max: float
     max_exposure: float
     trade_size_percent: float = 1.0  # Default 1%
+    spread_config: dict | None = None  # Dynamic spread configuration
+    market_config: dict | None = None  # Market discovery configuration
 
 
 @dataclass
