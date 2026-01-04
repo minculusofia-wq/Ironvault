@@ -40,3 +40,4 @@ logs/*.log
 .idea/
 .vscode/
 *.swp
+logs/

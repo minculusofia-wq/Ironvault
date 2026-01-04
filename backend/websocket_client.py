@@ -28,24 +28,28 @@ class WebSocketClient:
     Async WebSocket Client for Polymarket.
     Manages connection, subscriptions, and message dispatch.
     """
-    
+
     def __init__(self, ws_url: str, audit_logger: AuditLogger):
         self._url = ws_url
         self._audit = audit_logger
         self._ws: websockets.WebSocketClientProtocol | None = None
         self._running = False
         self._lock = asyncio.Lock()
-        
+
         # Callbacks: token_id -> function(snapshot)
         self._book_callbacks: Dict[str, list[Callable[[Any], None]]] = {}
-        
+
         # Setup SSL context for macOS
         self._ssl_context = ssl.create_default_context(cafile=certifi.where())
         self._audit.log_system_event("SSL_CONTEXT_CREATED", {"cafile": certifi.where()})
-        
+
         self._reconnect_task: asyncio.Task | None = None
         self._retry_delay = 1.0
         self._max_retry_delay = 60.0
+
+        # v3.0: Reduce log spam - only log every Nth subscription
+        self._sub_count = 0
+        self._sub_log_interval = 50  # Log every 50 subscriptions
 
     async def start(self):
         """Start the background connection manager."""
@@ -146,7 +150,14 @@ class WebSocketClient:
                 "token_id": token_id
             }
             await self._ws.send(json_dumps(msg))
-            self._audit.log_system_event("WS_SUBSCRIBED", {"token": token_id})
+
+            # v3.0: Reduce log spam - only log every Nth subscription
+            self._sub_count += 1
+            if self._sub_count % self._sub_log_interval == 0:
+                self._audit.log_system_event("WS_SUBSCRIBED_BATCH", {
+                    "count": self._sub_count,
+                    "latest_token": token_id[:16] + "..."
+                })
         except Exception as e:
             self._audit.log_error("WS_SUB_ERROR", str(e))
 
@@ -156,10 +167,19 @@ class WebSocketClient:
             async for msg in self._ws:
                 if not self._running:
                     break
-                
-                data = json_loads(msg)
+
+                # v3.0: Skip empty messages (keep-alive, ping responses)
+                if not msg or (isinstance(msg, str) and not msg.strip()):
+                    continue
+
+                try:
+                    data = json_loads(msg)
+                except (ValueError, TypeError):
+                    # Non-JSON message (ping/pong text, status messages) - skip silently
+                    continue
+
                 event_type = data.get("event_type") or data.get("type")
-                
+
                 if event_type == "book":
                     token_id = data.get("token_id") or data.get("market")
                     if token_id and token_id in self._book_callbacks:
