@@ -264,6 +264,10 @@ class MainWindow(QMainWindow):
     @Slot()
     def _update_ui(self):
         """Periodic UI update from orchestrator state."""
+        # Optimization: Don't update if window is not visible to save CPU
+        if self.isMinimized() or not self.isVisible():
+            return
+
         try:
             # v2.5 UI Pulse for diagnostic
             self._tick_count = getattr(self, "_tick_count", 0) + 1

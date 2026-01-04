@@ -2,13 +2,17 @@
 Audit Logger Module
 Write-only logging of all operator actions and state transitions.
 Structured format with timestamps.
+
+v3.0: Added log rotation and disk space protection.
 """
 
 import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from pathlib import Path
 from enum import Enum
 from typing import Any
+import os
 
 
 class EventType(Enum):
@@ -24,34 +28,69 @@ class EventType(Enum):
 
 class AuditLogger:
     """
-    Write-only audit logger.
+    Write-only audit logger with rotation.
     All actions are logged with timestamps in structured format.
     """
-    
+
+    # v3.0: Log rotation settings
+    MAX_LOG_SIZE_MB = 10  # Max size per log file
+    MAX_BACKUP_COUNT = 5  # Keep 5 backup files
+    MAX_TOTAL_LOGS_MB = 100  # Max total log folder size
+
     def __init__(self, log_dir: str = "logs"):
         self._log_dir = Path(log_dir)
         self._log_dir.mkdir(parents=True, exist_ok=True)
-        
+
+        # v3.0: Cleanup old logs if folder is too large
+        self._cleanup_old_logs()
+
         self._log_file = self._log_dir / f"audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-        
+
         self._logger = logging.getLogger("audit")
         self._logger.setLevel(logging.INFO)
         self._logger.handlers.clear()
-        
-        file_handler = logging.FileHandler(self._log_file, encoding='utf-8')
+
+        # v3.0: Use RotatingFileHandler for automatic rotation
+        file_handler = RotatingFileHandler(
+            self._log_file,
+            maxBytes=self.MAX_LOG_SIZE_MB * 1024 * 1024,
+            backupCount=self.MAX_BACKUP_COUNT,
+            encoding='utf-8'
+        )
         file_handler.setLevel(logging.INFO)
-        
+
         formatter = logging.Formatter(
             '%(asctime)s | %(levelname)s | %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         file_handler.setFormatter(formatter)
-        
+
         self._logger.addHandler(file_handler)
-        
+
         self.log(EventType.OPERATOR_ACTION, "AUDIT_LOGGER_INITIALIZED", {
             "log_file": str(self._log_file)
         })
+
+    def _cleanup_old_logs(self) -> None:
+        """Remove old log files if total size exceeds limit."""
+        try:
+            log_files = sorted(
+                self._log_dir.glob("audit_*.log*"),
+                key=lambda f: f.stat().st_mtime
+            )
+
+            total_size = sum(f.stat().st_size for f in log_files)
+            max_bytes = self.MAX_TOTAL_LOGS_MB * 1024 * 1024
+
+            # Remove oldest files until under limit
+            while total_size > max_bytes and len(log_files) > 1:
+                oldest = log_files.pop(0)
+                total_size -= oldest.stat().st_size
+                oldest.unlink()
+                print(f"[AuditLogger] Removed old log: {oldest.name}")
+
+        except Exception as e:
+            print(f"[AuditLogger] Cleanup error: {e}")
     
     import re
     _HEX_64_RE = re.compile(r'([0-9a-fA-F]{64})')

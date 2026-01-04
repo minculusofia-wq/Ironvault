@@ -13,6 +13,7 @@ Responsibilities:
 - Compute max executable size given a slippage tolerance.
 """
 
+import asyncio
 import aiohttp
 import ssl
 import certifi
@@ -98,18 +99,30 @@ class ClobAdapter:
             session = await self._get_session()
             url = f"{self._base_url}/book"
             params = {"token_id": token_id}
-            
-            async with session.get(url, params=params, timeout=2) as response:  # v3.0: Reduced from 5s
-                response.raise_for_status()
+
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=3)) as response:
                 data = await response.json()
-            
+
+                # Check for API error response
+                if "error" in data:
+                    # Silent skip for invalid tokens (expected behavior)
+                    return None
+
+                # Check HTTP status after reading body
+                if response.status != 200:
+                    return None
+
             # Polymarket API returns dictionary with "bids" and "asks"
             # Each level is usually {"price": "...", "size": "..."}
             # We strictly parse and sort to guarantee structure
-            
+
             raw_bids = data.get("bids", [])
             raw_asks = data.get("asks", [])
-            
+
+            # Skip empty orderbooks
+            if not raw_bids and not raw_asks:
+                return None
+
             # Convert to list of [price, size] and Sort
             # Bids: High to Low
             bids = sorted(
@@ -117,29 +130,36 @@ class ClobAdapter:
                 key=lambda x: float(x[0]),
                 reverse=True
             )
-            
+
             # Asks: Low to High
             asks = sorted(
                 [[a["price"], a["size"]] for a in raw_asks],
                 key=lambda x: float(x[0]),
                 reverse=False
             )
-            
+
             # Timestamp (approximate, often not in public book endpoint compared to WS)
             # We use system time if API doesn't provide hash/timestamp
             import time
             timestamp = int(time.time() * 1000)
-            
+
             return MarketSnapshot(
                 token_id=token_id,
                 timestamp=timestamp,
                 bids=bids,
                 asks=asks
             )
-            
+
+        except aiohttp.ClientError as e:
+            # Network/connection errors - log with details
+            print(f"[ClobAdapter] Network error: {type(e).__name__}: {e}")
+            return None
+        except asyncio.TimeoutError:
+            # Timeout - silent skip (expected under load)
+            return None
         except Exception as e:
-            # In a production system we would log logic errors here
-            print(f"[ClobAdapter] Error fetching book: {e}")
+            # Unexpected errors - log with full details
+            print(f"[ClobAdapter] Error fetching book: {type(e).__name__}: {e}")
             return None
 
     def is_executable(self, 

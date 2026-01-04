@@ -5,12 +5,21 @@ Maintains live OrderBook state via delta updates.
 """
 
 import asyncio
-import json
 import logging
 import ssl
 import certifi
 import websockets
 from typing import Dict, Callable, Any
+
+try:
+    import orjson
+    # orjson returns bytes, which websockets can send directly
+    json_dumps = lambda x: orjson.dumps(x).decode('utf-8') 
+    json_loads = orjson.loads
+except ImportError:
+    import json
+    json_dumps = json.dumps
+    json_loads = json.loads
 
 from .audit_logger import AuditLogger
 
@@ -56,11 +65,31 @@ class WebSocketClient:
                 pass
         await self.disconnect()
 
+    @property
+    def is_connected(self) -> bool:
+        """Check if websocket is connected safely across versions."""
+        if self._ws is None:
+            return False
+        
+        # Check for .state (State.OPEN == 1)
+        if hasattr(self._ws, 'state'):
+            return self._ws.state == 1
+            
+        try:
+            # Modern websockets (10.0+)
+            return not self._ws.closed
+        except AttributeError:
+            try:
+                # Legacy websockets
+                return self._ws.open
+            except AttributeError:
+                return False
+
     async def _connection_manager(self):
         """Background task to maintain connection with exponential backoff."""
         while self._running:
             try:
-                if self._ws is None or self._ws.closed:
+                if not self.is_connected:
                     self._audit.log_system_event("WS_CONNECTING", {"url": self._url})
                     async with asyncio.timeout(10): # 10s timeout for handshake
                         self._ws = await websockets.connect(self._url, ssl=self._ssl_context)
@@ -105,7 +134,7 @@ class WebSocketClient:
             self._book_callbacks[token_id].append(callback)
             
             # Send subscribe message if connected
-            if self._ws and not self._ws.closed:
+            if self.is_connected:
                 await self._send_subscribe(token_id)
 
     async def _send_subscribe(self, token_id: str):
@@ -116,7 +145,7 @@ class WebSocketClient:
                 "channel": "orderbook",
                 "token_id": token_id
             }
-            await self._ws.send(json.dumps(msg))
+            await self._ws.send(json_dumps(msg))
             self._audit.log_system_event("WS_SUBSCRIBED", {"token": token_id})
         except Exception as e:
             self._audit.log_error("WS_SUB_ERROR", str(e))
@@ -128,7 +157,7 @@ class WebSocketClient:
                 if not self._running:
                     break
                 
-                data = json.loads(msg)
+                data = json_loads(msg)
                 event_type = data.get("event_type") or data.get("type")
                 
                 if event_type == "book":

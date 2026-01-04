@@ -11,6 +11,15 @@ import certifi
 from typing import Any
 from .audit_logger import AuditLogger
 
+try:
+    import orjson
+    json_serialize = lambda x: orjson.dumps(x).decode()
+    json_loads = orjson.loads
+except ImportError:
+    import json
+    json_serialize = json.dumps
+    json_loads = json.loads
+
 class GammaClient:
     """
     Async Client for Polymarket Gamma API (Market Discovery).
@@ -25,7 +34,10 @@ class GammaClient:
         if self._session is None or self._session.closed:
             ssl_context = ssl.create_default_context(cafile=certifi.where())
             connector = aiohttp.TCPConnector(ssl=ssl_context)
-            self._session = aiohttp.ClientSession(connector=connector)
+            self._session = aiohttp.ClientSession(
+                connector=connector,
+                json_serialize=json_serialize
+            )
         return self._session
     
     def set_session(self, session: aiohttp.ClientSession):
@@ -47,7 +59,7 @@ class GammaClient:
             
             async with session.get(url, timeout=10) as response:
                 response.raise_for_status()
-                return await response.json()
+                return await response.json(loads=json_loads)
                 
         except Exception as e:
             self._audit.log_error("GAMMA_API_ERROR", f"Failed to fetch market {condition_id}: {str(e)}")
@@ -70,7 +82,7 @@ class GammaClient:
             timeout = aiohttp.ClientTimeout(total=10)
             async with session.get(url, params=params, timeout=timeout) as response:
                 response.raise_for_status()
-                events = await response.json()
+                events = await response.json(loads=json_loads)
             
             return events
             

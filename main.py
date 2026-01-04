@@ -10,6 +10,16 @@ from frontend.main_window import MainWindow
 
 def main():
     """Application entry point."""
+    # v2.5 Performance Optimization: Use uvloop if available
+    if sys.platform != "win32":
+        try:
+            import uvloop
+            import asyncio
+            asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+            print("🚀 uvloop activated for high-performance async I/O")
+        except ImportError:
+            pass
+
     app = QApplication(sys.argv)
     app.setApplicationName("IRONVAULT Trading Bot")
     app.setOrganizationName("IRONVAULT")
