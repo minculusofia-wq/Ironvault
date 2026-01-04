@@ -1,11 +1,19 @@
-# IRONVAULT Trading Bot
+# IRONVAULT Trading Bot v3.0
 
 Bot de trading automatisé sécurisé avec interface graphique pour Polymarket.
 
 ## 🎯 Stratégies Supportées
 
 - **Strategy_A (Front-Running)**: Réaction ultra-rapide aux données externes (Scoreboard/Fast-Data) pour devancer le marché.
+  - Lock par token pour éviter les positions dupliquées
+  - Déduplication des triggers (cooldown 5s)
+  - Cache orderbook (TTL 150ms)
+  - Exits dynamiques (profit target, stop-loss, trailing stop)
+
 - **Strategy_B (Market Making)**: Fourniture de liquidité algorithmique avec découverte autonome des marchés les plus actifs.
+  - Spread dynamique basé sur la volatilité
+  - Multi-market (jusqu'à 100 marchés)
+  - Discovery accéléré avec MarketScanner
 
 ## 🛡️ Priorités de Sécurité
 
@@ -26,21 +34,46 @@ Bot de trading automatisé sécurisé avec interface graphique pour Polymarket.
 - **Gestion Sécurisée des Credentials**: Clés API stockées en mémoire uniquement dans un Vault sécurisé.
 - **Filtre de Volatilité**: Protection automatique contre les mouvements de prix extrêmes et irrationnels.
 
+## 🚀 Optimisations v3.0
+
+### Performance
+- **Rate Limiter**: 50 req/s (burst 100) pour un throughput maximal
+- **Batch sizes**: 25 marchés par batch (market scanner), 20 tokens (price monitor)
+- **Délais réduits**: 20ms entre batches (vs 100ms précédemment)
+- **Timeout API**: 2s (vs 5s) pour une détection d'erreur rapide
+
+### Précision Paper Trading
+- **Slippage basé sur profondeur**: `base + (size/100) * factor + noise`
+- **Latence réaliste**: 20-100ms
+- **Fill probability**: 95%
+
+### Nouveaux Composants
+- **MarketScanner**: Scoring multi-facteurs (volume, spread, depth, activité)
+- **AnalyticsEngine**: Sharpe Ratio, Max Drawdown, Profit Factor en temps réel
+- **PolymarketPriceMonitor**: Détection de price spikes, imbalances, spread compression
+
 ## 📁 Structure du Projet
 
 ```
 Ironvault/
 ├── config/
-│   └── config.example.json      # Template de configuration
+│   ├── config.example.json      # Template de configuration
+│   ├── super_paper_trading.json # Config paper trading optimisée
+│   └── ultra_optimized.json     # Config ultra performance v3.0
 ├── backend/
-│   ├── scoreboard_monitor.py    # Monitoring données haute vitesse
 │   ├── orchestrator.py          # Coordination centrale
-│   ├── execution_engine.py      # Mécanique d'exécution
+│   ├── execution_engine.py      # Mécanique d'exécution (v3.0: slippage depth-based)
+│   ├── market_scanner.py        # v3.0: Scoring multi-facteurs des marchés
+│   ├── analytics_engine.py      # v3.0: Métriques temps réel
+│   ├── scoreboard_monitor.py    # Monitoring données haute vitesse
 │   ├── market_data.py           # Client Gamma API
-│   ├── clob_adapter.py          # Adaptateur CLOB déterministe
+│   ├── clob_adapter.py          # Adaptateur CLOB (v3.0: timeout 2s)
+│   ├── data_feeds/              # v3.0: Data feeds infrastructure
+│   │   ├── base_feed.py         # Interface de base
+│   │   └── polymarket_feed.py   # Price monitor (spikes, imbalances)
 │   └── strategies/
-│       ├── strategy_a_front_running.py
-│       └── strategy_b_market_making.py
+│       ├── strategy_a_front_running.py  # v3.0: locks, cache, trailing stop
+│       └── strategy_b_market_making.py  # v3.0: volatility score
 ├── frontend/
 │   ├── main_window.py           # Fenêtre principale
 │   ├── dashboard.py             # Monitoring visuel

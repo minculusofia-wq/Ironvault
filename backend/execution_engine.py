@@ -2,18 +2,33 @@
 ExecutionEngine Module (Async)
 Executor that runs a background async task to process the order queue.
 Wraps synchronous CLOB client calls in a thread executor to prevent blocking.
+
+v2.5 Optimizations:
+- Position tracking for PnL calculation (FIFO)
+- Realistic paper trading with slippage simulation
+- Fill probability based on liquidity
 """
 
 from enum import Enum
-from dataclasses import dataclass
-from typing import Callable
+from dataclasses import dataclass, field
+from typing import Callable, List
 import asyncio
 import time
+import random
 
 from .audit_logger import AuditLogger
 from .rate_limiter import RateLimiter
 from py_clob_client.client import ClobClient, ApiCreds
 from py_clob_client.clob_types import OrderArgs
+
+
+@dataclass
+class Position:
+    """Represents a position entry for PnL tracking."""
+    price: float
+    size: float
+    timestamp: float
+    order_id: str
 
 # Import for type hint only - avoid circular import
 from typing import TYPE_CHECKING
@@ -56,15 +71,33 @@ class ExecutionEngine:
         self._credentials: "CredentialsManager | None" = None
         self._clob_client: ClobClient | None = None
         
-        # Rate Limiter (10 req/s burst 20)
-        self._rate_limiter = RateLimiter(max_tokens=20, refill_rate=10)
-        
-        # API Config Defaults 
+        # v3.0: Rate Limiter (50 req/s burst 100) - increased for better throughput
+        self._rate_limiter = RateLimiter(max_tokens=100, refill_rate=50)
+
+        # API Config Defaults
         self._host = "https://clob.polymarket.com"
         self._chain_id = 137  # Polygon Mainnet
-        
+
         self._status_callbacks: list[Callable[[Order], None]] = []
         self._processing_task: asyncio.Task | None = None
+
+        # v2.5: Position tracking for PnL calculation (FIFO)
+        self._positions: dict[str, List[Position]] = {}  # token_id -> [Position entries]
+        self._realized_pnl: dict[str, float] = {}  # token_id -> cumulative PnL
+        self._total_realized_pnl: float = 0.0
+
+        # v3.0: Paper trading simulation config (enhanced)
+        self._paper_config = {
+            'slippage_base': 0.0008,     # 0.08% base slippage
+            'slippage_min': 0.0003,      # 0.03% minimum slippage
+            'slippage_max': 0.008,       # 0.8% maximum slippage
+            'slippage_size_factor': 0.001,  # Additional slippage per $100 size
+            'fill_probability': 0.92,    # 92% base fill rate
+            'latency_min_ms': 30,        # Minimum latency
+            'latency_max_ms': 150,       # Maximum latency
+            'partial_fill_chance': 0.10, # 10% chance of partial fill
+            'depth_impact_factor': 0.0005  # Market impact factor
+        }
     
     def configure_api(self, host: str, chain_id: int = 137, paper_trading: bool = False):
         """Configure CLOB API connection settings."""
@@ -205,17 +238,29 @@ class ExecutionEngine:
         result_data = {}
         
         if getattr(self, '_paper_trading', False):
-             # PAPER TRADING SIMULATION
-             # We assume immediate fill for now or we could use clob_adapter to check if fills are possible
-             try:
-                 # Simulate network delay
-                 await asyncio.sleep(0.1) 
-                 result_data = {'clob_response': 'PAPER_TRADE_FILLED', 'simulated': True}
-                 execution_success = True
-                 self._audit.log_strategy_event(order.strategy, "PAPER_TRADE_EXECUTED", {"order_id": order_id, "params": order.params})
-             except Exception as e:
-                 execution_success = False
-                 result_data = {'error': str(e)}
+            # v2.5: REALISTIC PAPER TRADING SIMULATION
+            try:
+                result_data = await self._simulate_paper_trade(order)
+                execution_success = result_data.get('filled', False)
+
+                if execution_success:
+                    # Track position and calculate PnL
+                    self._track_position(order, result_data)
+                    self._audit.log_strategy_event(order.strategy, "PAPER_TRADE_EXECUTED", {
+                        "order_id": order_id,
+                        "params": order.params,
+                        "simulated_price": result_data.get('executed_price'),
+                        "fill_size": result_data.get('fill_size'),
+                        "pnl": result_data.get('pnl', 0)
+                    })
+                else:
+                    self._audit.log_strategy_event(order.strategy, "PAPER_TRADE_REJECTED", {
+                        "order_id": order_id,
+                        "reason": result_data.get('reject_reason', 'unknown')
+                    })
+            except Exception as e:
+                execution_success = False
+                result_data = {'error': str(e)}
 
         elif self._clob_client:
             try:
@@ -303,3 +348,208 @@ class ExecutionEngine:
     @property
     def pending_count(self) -> int:
         return sum(1 for o in self._orders.values() if o.status == OrderStatus.PENDING)
+
+    # ============= v2.5: Paper Trading Simulation =============
+
+    async def _simulate_paper_trade(self, order: Order) -> dict:
+        """
+        Realistic paper trading simulation with slippage, partial fills, and latency.
+        Returns a dict with execution details.
+        """
+        cfg = self._paper_config
+        token_id = order.params.get('token_id', '')
+        price = float(order.params.get('price', 0))
+        size = float(order.params.get('size', 0))
+        side = order.params.get('side', 'BUY').upper()
+
+        # 1. Simulate network latency (50-200ms)
+        latency = random.randint(cfg['latency_min_ms'], cfg['latency_max_ms']) / 1000.0
+        await asyncio.sleep(latency)
+
+        # 2. Check fill probability (simulates liquidity availability)
+        if random.random() > cfg['fill_probability']:
+            return {
+                'filled': False,
+                'reject_reason': 'INSUFFICIENT_LIQUIDITY',
+                'simulated': True,
+                'latency_ms': latency * 1000
+            }
+
+        # 3. v3.0: Calculate depth-based slippage
+        # Base slippage + size impact + random market noise
+        base_slippage = cfg['slippage_base']
+        size_impact = (size / 100.0) * cfg['slippage_size_factor']  # Per $100 impact
+        market_noise = random.uniform(-0.0002, 0.0002)  # ±0.02% random noise
+
+        # Total slippage bounded by min/max
+        slippage = max(cfg['slippage_min'], min(cfg['slippage_max'], base_slippage + size_impact + market_noise))
+
+        if side == 'BUY':
+            # Buying costs more (price goes up)
+            executed_price = price * (1 + slippage)
+        else:
+            # Selling gets less (price goes down)
+            executed_price = price * (1 - slippage)
+
+        # 4. Partial fill simulation
+        fill_size = size
+        is_partial = False
+        if random.random() < cfg['partial_fill_chance']:
+            fill_size = size * random.uniform(0.5, 0.95)
+            is_partial = True
+
+        # 5. Calculate PnL if this is a closing trade
+        pnl = 0.0
+        if side == 'SELL' and token_id in self._positions and self._positions[token_id]:
+            pnl = self._calculate_fifo_pnl(token_id, executed_price, fill_size)
+
+        return {
+            'filled': True,
+            'executed_price': round(executed_price, 6),
+            'requested_price': price,
+            'slippage_pct': round(slippage * 100, 3),
+            'fill_size': round(fill_size, 4),
+            'requested_size': size,
+            'is_partial_fill': is_partial,
+            'pnl': round(pnl, 4),
+            'latency_ms': round(latency * 1000, 1),
+            'simulated': True,
+            'clob_response': 'PAPER_TRADE_FILLED'
+        }
+
+    def _track_position(self, order: Order, result: dict) -> None:
+        """Track position for PnL calculation using FIFO method."""
+        token_id = order.params.get('token_id', '')
+        side = order.params.get('side', 'BUY').upper()
+        executed_price = result.get('executed_price', 0)
+        fill_size = result.get('fill_size', 0)
+
+        if token_id not in self._positions:
+            self._positions[token_id] = []
+
+        if side == 'BUY':
+            # Add new position entry
+            self._positions[token_id].append(Position(
+                price=executed_price,
+                size=fill_size,
+                timestamp=time.time(),
+                order_id=order.order_id
+            ))
+        elif side == 'SELL':
+            # Remove from positions (FIFO) - already calculated PnL
+            self._consume_positions(token_id, fill_size)
+
+    def _calculate_fifo_pnl(self, token_id: str, sell_price: float, sell_size: float) -> float:
+        """
+        Calculate PnL using FIFO (First In First Out) method.
+        Returns the realized PnL for this sell.
+        """
+        if token_id not in self._positions:
+            return 0.0
+
+        positions = self._positions[token_id]
+        if not positions:
+            return 0.0
+
+        remaining_to_sell = sell_size
+        total_pnl = 0.0
+        total_cost = 0.0
+        total_sold = 0.0
+
+        for pos in positions:
+            if remaining_to_sell <= 0:
+                break
+
+            # How much can we sell from this position?
+            sellable = min(pos.size, remaining_to_sell)
+
+            # Cost basis for this portion
+            cost = sellable * pos.price
+            revenue = sellable * sell_price
+            pnl = revenue - cost
+
+            total_cost += cost
+            total_sold += sellable
+            total_pnl += pnl
+            remaining_to_sell -= sellable
+
+        # Update cumulative PnL tracking
+        if token_id not in self._realized_pnl:
+            self._realized_pnl[token_id] = 0.0
+        self._realized_pnl[token_id] += total_pnl
+        self._total_realized_pnl += total_pnl
+
+        self._audit.log_strategy_event("PNL_TRACKER", "PNL_REALIZED", {
+            "token": token_id[:16] + "...",
+            "sell_price": sell_price,
+            "sell_size": sell_size,
+            "cost_basis": round(total_cost, 4),
+            "pnl": round(total_pnl, 4),
+            "cumulative_pnl": round(self._total_realized_pnl, 4)
+        })
+
+        return total_pnl
+
+    def _consume_positions(self, token_id: str, size: float) -> None:
+        """Consume positions in FIFO order after a sell."""
+        if token_id not in self._positions:
+            return
+
+        remaining = size
+        new_positions = []
+
+        for pos in self._positions[token_id]:
+            if remaining <= 0:
+                new_positions.append(pos)
+            elif pos.size <= remaining:
+                # Fully consume this position
+                remaining -= pos.size
+            else:
+                # Partially consume this position
+                pos.size -= remaining
+                new_positions.append(pos)
+                remaining = 0
+
+        self._positions[token_id] = new_positions
+
+    # ============= v2.5: PnL Accessors =============
+
+    @property
+    def total_realized_pnl(self) -> float:
+        """Get total realized PnL across all tokens."""
+        return self._total_realized_pnl
+
+    @property
+    def realized_pnl_by_token(self) -> dict[str, float]:
+        """Get realized PnL breakdown by token."""
+        return self._realized_pnl.copy()
+
+    @property
+    def open_positions(self) -> dict[str, List[Position]]:
+        """Get all open positions."""
+        return {k: v.copy() for k, v in self._positions.items() if v}
+
+    def get_position_value(self, token_id: str, current_price: float) -> dict:
+        """Calculate unrealized PnL for a specific token."""
+        if token_id not in self._positions or not self._positions[token_id]:
+            return {'size': 0, 'cost_basis': 0, 'current_value': 0, 'unrealized_pnl': 0}
+
+        total_size = sum(p.size for p in self._positions[token_id])
+        total_cost = sum(p.size * p.price for p in self._positions[token_id])
+        current_value = total_size * current_price
+        unrealized_pnl = current_value - total_cost
+
+        return {
+            'size': round(total_size, 4),
+            'cost_basis': round(total_cost, 4),
+            'current_value': round(current_value, 4),
+            'unrealized_pnl': round(unrealized_pnl, 4),
+            'avg_entry_price': round(total_cost / total_size, 6) if total_size > 0 else 0
+        }
+
+    def configure_paper_trading(self, config: dict) -> None:
+        """Update paper trading simulation parameters."""
+        for key in config:
+            if key in self._paper_config:
+                self._paper_config[key] = config[key]
+        self._audit.log_system_event("PAPER_CONFIG_UPDATED", self._paper_config)

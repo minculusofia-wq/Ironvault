@@ -30,6 +30,9 @@ from .strategies.strategy_b_market_making import StrategyBMarketMaking
 from .scoreboard_monitor import ScoreboardMonitor
 from .performance_tracker import PerformanceTracker, TradeRecord
 from .volatility_filter import VolatilityFilter
+from .market_scanner import MarketScanner
+from .analytics_engine import AnalyticsEngine
+from .data_feeds.polymarket_feed import PolymarketPriceMonitor
 
 
 class BotState(Enum):
@@ -66,10 +69,16 @@ class Orchestrator:
         
         self._performance: PerformanceTracker | None = None
         self._volatility: VolatilityFilter | None = None
-        
+
+        # v2.5 New Components
+        self._market_scanner: MarketScanner | None = None
+        self._analytics: AnalyticsEngine | None = None
+        self._price_monitor: PolymarketPriceMonitor | None = None
+
         self._ws_client: WebSocketClient | None = None
         self._session: aiohttp.ClientSession | None = None
         self._performance_results = {} # v2.5 UI Cache
+        self._analytics_results = {} # v2.5 Analytics Cache
         
         self._heartbeat_thread: threading.Thread | None = None
         self._heartbeat_running = False
@@ -187,7 +196,35 @@ class Orchestrator:
         # v2.0 Optimizations
         self._performance = PerformanceTracker(self._audit)
         self._volatility = VolatilityFilter(self._audit)
-        
+
+        # v2.5 Market Scanner and Analytics
+        self._market_scanner = MarketScanner(
+            gamma_client=self._market_data,
+            clob_adapter=self._clob_adapter,
+            audit_logger=self._audit
+        )
+
+        self._analytics = AnalyticsEngine(
+            audit_logger=self._audit,
+            initial_capital=self._config.capital.total
+        )
+
+        # v2.5 Price Monitor for Strategy A (starts in heartbeat loop)
+        self._price_monitor = PolymarketPriceMonitor(
+            clob_adapter=self._clob_adapter,
+            market_scanner=self._market_scanner,
+            audit_logger=self._audit,
+            poll_interval=1.0
+        )
+
+        # Configure from config if available
+        if hasattr(self._config, 'market_scanner') and self._config.market_scanner:
+            scanner_cfg = self._config.market_scanner
+            if hasattr(scanner_cfg, 'weights'):
+                self._market_scanner.configure(weights=scanner_cfg.weights)
+            if hasattr(scanner_cfg, 'thresholds'):
+                self._market_scanner.configure(thresholds=scanner_cfg.thresholds)
+
         # Initialize WebSocket Client (Connection happens in async loop)
         ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
         self._ws_client = WebSocketClient(ws_url, self._audit)
@@ -208,7 +245,8 @@ class Orchestrator:
             audit_logger=self._audit,
             clob_adapter=self._clob_adapter,
             scoreboard_monitor=self._scoreboard,
-            volatility_filter=self._volatility
+            volatility_filter=self._volatility,
+            data_feed=self._price_monitor
         )
         
         self._strategy_b = StrategyBMarketMaking(
@@ -382,6 +420,20 @@ class Orchestrator:
                 
                 if self._scoreboard and not self._scoreboard._running:
                     await self._scoreboard.start()
+
+                # v2.5: Start Market Scanner and Price Monitor
+                if self._price_monitor and not self._price_monitor._running:
+                    try:
+                        await self._price_monitor.start()
+                    except Exception as e:
+                        self._audit.log_error("PRICE_MONITOR_START_FAILED", str(e))
+
+                # Periodic market scan (non-blocking)
+                if self._market_scanner:
+                    try:
+                        await self._market_scanner.scan_markets(limit=50)
+                    except Exception as e:
+                        self._audit.log_error("MARKET_SCAN_FAILED", str(e))
                 
                 # 2. Ensure Execution Engine is enabled
                 if self._execution and not self._execution.is_enabled:
@@ -415,6 +467,10 @@ class Orchestrator:
                     # 5. Background Task: Update Performance Results for UI (Offloaded from UI thread)
                     if self._performance:
                         self._performance_results = self._performance.get_summary_stats()
+
+                    # v2.5: Update Analytics Cache for UI
+                    if self._analytics:
+                        self._analytics_results = self._analytics.get_summary()
                             
             except Exception as e:
                 self._audit.log_error("HEARTBEAT_LOOP_TICK_ERROR", str(e))
@@ -510,3 +566,30 @@ class Orchestrator:
     def credentials_status(self) -> CredentialsStatus:
         """Credentials status for dashboard."""
         return self._credentials.get_status()
+
+    @property
+    def analytics_summary(self) -> dict:
+        """Get cached analytics summary (Thread-safe for UI)."""
+        return self._analytics_results or {}
+
+    @property
+    def market_scanner_status(self) -> dict:
+        """Get market scanner status."""
+        if self._market_scanner:
+            return {
+                'cached_markets': self._market_scanner.cached_market_count,
+                'last_scan_age_sec': round(self._market_scanner.last_scan_age_seconds, 1),
+                'top_mm_markets': len(self._market_scanner.get_top_markets_for_mm(limit=10)),
+                'top_fr_markets': len(self._market_scanner.get_top_markets_for_fr(limit=10))
+            }
+        return {}
+
+    @property
+    def price_monitor_status(self) -> dict:
+        """Get price monitor status."""
+        if self._price_monitor:
+            return {
+                'running': self._price_monitor._running,
+                'monitored_tokens': self._price_monitor.monitored_token_count
+            }
+        return {}

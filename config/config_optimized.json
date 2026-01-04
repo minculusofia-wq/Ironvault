@@ -1,0 +1,106 @@
+{
+    "capital": {
+        "total": 1000.0,
+        "max_allocation_strategy_a": 400.0,
+        "max_allocation_strategy_b": 500.0
+    },
+    "strategy_a": {
+        "enabled": true,
+        "name": "Strategy A - Front-Running v2.5",
+        "max_events": 10,
+        "min_odds": 1.05,
+        "max_odds": 10.0,
+        "trade_size_percent": 5.0,
+        "exit_config": {
+            "exit_mode": "dynamic",
+            "profit_target_pct": 2.0,
+            "stop_loss_pct": 1.0,
+            "trailing_stop_pct": 0.5,
+            "max_hold_seconds": 120,
+            "min_hold_seconds": 5
+        }
+    },
+    "strategy_b": {
+        "enabled": true,
+        "name": "Strategy B - Market Making v2.5",
+        "spread_min": 0.01,
+        "spread_max": 0.15,
+        "max_exposure": 300.0,
+        "trade_size_percent": 5.0,
+        "spread_config": {
+            "base_spread": 0.02,
+            "min_spread": 0.005,
+            "max_spread": 0.10,
+            "volatility_multiplier": 1.5,
+            "inventory_skew_max": 0.005,
+            "imbalance_factor": 0.001,
+            "reprice_threshold": 0.005
+        },
+        "market_config": {
+            "max_markets": 50,
+            "discovery_interval": 30,
+            "min_volume_24h": 1000,
+            "min_spread_opportunity": 0.01,
+            "parallel_reconcile": true
+        }
+    },
+    "risk": {
+        "max_drawdown_percent": 10.0,
+        "max_daily_loss": 100.0,
+        "kill_switch_threshold": 15.0
+    },
+    "market": {
+        "connection_timeout_seconds": 30,
+        "heartbeat_interval_seconds": 2,
+        "rpc_url": "https://polygon-mainnet.g.alchemy.com/v2/YOUR_KEY",
+        "clob_api_url": "https://clob.polymarket.com/",
+        "gamma_api_url": "https://gamma-api.polymarket.com/",
+        "paper_trading": true
+    },
+    "paper_trading": {
+        "enabled": true,
+        "realistic_mode": true,
+        "slippage_min": 0.001,
+        "slippage_max": 0.005,
+        "fill_probability": 0.85,
+        "latency_min_ms": 50,
+        "latency_max_ms": 200,
+        "partial_fill_chance": 0.15
+    },
+    "analytics": {
+        "enabled": true,
+        "equity_curve_points": 100,
+        "recent_trades_limit": 50
+    },
+    "market_scanner": {
+        "enabled": true,
+        "weights": {
+            "volume": 0.25,
+            "spread": 0.25,
+            "depth": 0.20,
+            "activity": 0.15,
+            "time_to_resolution": 0.15
+        },
+        "thresholds": {
+            "min_volume_24h": 1000,
+            "min_spread_for_mm": 0.01,
+            "max_spread_for_mm": 0.20,
+            "min_depth_usd": 100,
+            "min_score_for_trading": 0.3
+        }
+    },
+    "data_feeds": {
+        "polymarket_monitor": {
+            "enabled": true,
+            "poll_interval": 1.0,
+            "thresholds": {
+                "price_spike_pct": 3.0,
+                "price_spike_window_sec": 60,
+                "volume_spike_std": 2.5,
+                "imbalance_threshold": 0.7,
+                "spread_compression_pct": 50,
+                "min_confidence": 0.5
+            }
+        }
+    }
+}

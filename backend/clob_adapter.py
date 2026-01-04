@@ -99,7 +99,7 @@ class ClobAdapter:
             url = f"{self._base_url}/book"
             params = {"token_id": token_id}
             
-            async with session.get(url, params=params, timeout=5) as response:
+            async with session.get(url, params=params, timeout=2) as response:  # v3.0: Reduced from 5s
                 response.raise_for_status()
                 data = await response.json()
             
