@@ -176,38 +176,43 @@ class StrategyBMarketMaking(BaseStrategy):
 
     def _on_book_update(self, data: dict):
         """Callback for WS updates."""
-        token_id = data.get("token_id") or data.get("market")
+        # v3.0: Handle multiple field names from Polymarket
+        token_id = (data.get("asset_id") or data.get("token_id")
+                   or data.get("market") or data.get("market_id"))
         if not token_id:
             return
-            
+
         if token_id not in self._live_books:
             self._live_books[token_id] = LiveOrderBook(token_id)
-            
-        # Parse update
-        # Assuming data format matches what we expect from our customized WS client
-        # In a real scenario, we parse structure: {bids: [], asks: [], ...}
-        # For this 'stub' WS client, we assume it passes raw data.
-        # We need to map it.
-        
-        # Simplified: If 'bids' in data, it's a snapshot or update.
-        # This part depends heavily on the specific WS API format.
-        # We will wrap in try-catch.
+
         try:
             timestamp = int(time.time() * 1000)
+            event_type = data.get("event_type") or data.get("type")
+
+            # v3.0: Handle "book" event - full orderbook snapshot
             if "bids" in data and "asks" in data:
-                 # Snapshot or heavy update
-                 self._live_books[token_id].apply_snapshot(data["bids"], data["asks"], timestamp)
-                 
+                self._live_books[token_id].apply_snapshot(data["bids"], data["asks"], timestamp)
+
+            # v3.0: Handle "price_change" event - best bid/ask only
+            elif event_type == "price_change":
+                # Convert to simple snapshot format
+                best_bid = data.get("best_bid")
+                best_ask = data.get("best_ask")
+                if best_bid is not None and best_ask is not None:
+                    bids = [[str(best_bid), "100"]]  # Dummy size for market making
+                    asks = [[str(best_ask), "100"]]
+                    self._live_books[token_id].apply_snapshot(bids, asks, timestamp)
+
+            # v3.0: Handle delta/changes
             if "changes" in data:
-                 # Delta
-                 for change in data["changes"]:
-                     side = change.get("side", "buy").lower()
-                     price = float(change.get("price", 0))
-                     size = float(change.get("size", 0))
-                     self._live_books[token_id].apply_delta(side, price, size)
-                     
+                for change in data["changes"]:
+                    side = change.get("side", "buy").lower()
+                    price = float(change.get("price", 0))
+                    size = float(change.get("size", 0))
+                    self._live_books[token_id].apply_delta(side, price, size)
+
         except Exception as e:
-            # Log verify verbose only if needed
+            # Silent fail to avoid spam - orderbook will be fetched on next cycle
             pass
 
     async def process_tick(self) -> None:
@@ -297,10 +302,22 @@ class StrategyBMarketMaking(BaseStrategy):
     async def _parallel_reconcile(self) -> None:
         """v2.5: Process all markets in parallel for speed."""
         tasks = []
+        now = time.time()
 
         for market_id, book in list(self._live_books.items()):
             try:
                 snapshot = book.get_snapshot()
+
+                # v3.0: Fallback to REST API if WebSocket data is empty or stale (>30s)
+                is_stale = (now * 1000 - book.timestamp) > 30000 if book.timestamp > 0 else True
+                if not snapshot or snapshot.midpoint == 0 or is_stale:
+                    # Fetch via REST API as fallback
+                    rest_snapshot = await self._clob_adapter.get_orderbook(market_id)
+                    if rest_snapshot and rest_snapshot.midpoint > 0:
+                        snapshot = rest_snapshot
+                        # Update live book with REST data
+                        book.apply_snapshot(rest_snapshot.bids, rest_snapshot.asks, rest_snapshot.timestamp)
+
                 if snapshot and snapshot.midpoint > 0:
                     tasks.append(self._reconcile_market(market_id, snapshot))
             except Exception:

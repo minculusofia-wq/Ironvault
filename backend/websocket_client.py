@@ -144,10 +144,11 @@ class WebSocketClient:
     async def _send_subscribe(self, token_id: str):
         """Helper to send subscription message."""
         try:
+            # v3.0: Correct Polymarket WebSocket subscription format
+            # Docs: https://docs.polymarket.com/quickstart/websocket/WSS-Quickstart
             msg = {
-                "type": "subscribe",
-                "channel": "orderbook",
-                "token_id": token_id
+                "type": "market",
+                "assets_ids": [token_id]
             }
             await self._ws.send(json_dumps(msg))
 
@@ -180,8 +181,13 @@ class WebSocketClient:
 
                 event_type = data.get("event_type") or data.get("type")
 
-                if event_type == "book":
-                    token_id = data.get("token_id") or data.get("market")
+                # v3.0: Handle multiple Polymarket event types
+                # Docs: book, price_change, tick_size_change, last_trade_price
+                if event_type in ("book", "price_change"):
+                    # Try multiple field names for token ID
+                    token_id = (data.get("asset_id") or data.get("token_id")
+                               or data.get("market") or data.get("market_id"))
+
                     if token_id and token_id in self._book_callbacks:
                         for cb in self._book_callbacks[token_id]:
                             try:
