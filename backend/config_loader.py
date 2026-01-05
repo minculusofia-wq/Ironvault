@@ -43,6 +43,7 @@ class StrategyBConfig:
     trade_size_percent: float = 1.0  # Default 1%
     spread_config: dict | None = None  # Dynamic spread configuration
     market_config: dict | None = None  # Market discovery configuration
+    exit_config: dict | None = None  # v3.2: Exit strategy configuration
 
 
 @dataclass
