@@ -41,6 +41,13 @@ class MarketState:
     last_update: float = 0.0
     volatility_score: float = 0.0
     current_spread: float = 0.0
+    # v3.2: Exit tracking fields
+    entry_price: float = 0.0           # Average entry price for position
+    entry_time: float = 0.0            # Time position was opened
+    highest_price: float = 0.0         # High water mark for trailing stop
+    lowest_price: float = float('inf') # Low water mark
+    unrealized_pnl: float = 0.0        # Current unrealized PnL in USD
+    unrealized_pnl_pct: float = 0.0    # Current unrealized PnL in %
 
 class StrategyBMarketMaking(BaseStrategy):
     """
@@ -98,6 +105,16 @@ class StrategyBMarketMaking(BaseStrategy):
             'min_volume_24h': 1000,           # Minimum 24h volume in USD
             'min_spread_opportunity': 0.01,   # Minimum spread to be profitable
             'parallel_reconcile': True        # Process markets in parallel
+        }
+
+        # v3.2: Exit configuration for position management
+        self._exit_config = getattr(config, 'exit_config', None) or {
+            'profit_target_pct': 1.5,         # Exit at +1.5% profit
+            'stop_loss_pct': 1.0,             # Exit at -1% loss
+            'trailing_stop_pct': 0.5,         # 0.5% trailing from high
+            'max_hold_seconds': 300,          # 5 minutes max hold
+            'min_hold_seconds': 10,           # 10s minimum before exit
+            'exit_mode': 'dynamic'            # 'dynamic', 'fixed', or 'hybrid'
         }
 
         # v2.5: Performance tracking
@@ -217,7 +234,7 @@ class StrategyBMarketMaking(BaseStrategy):
 
     async def process_tick(self) -> None:
         """
-        v2.5: Enhanced process tick with parallel market processing.
+        v3.2: Enhanced process tick with exit management.
         """
         if self._state != StrategyState.ACTIVE:
             return
@@ -233,6 +250,9 @@ class StrategyBMarketMaking(BaseStrategy):
             await self._parallel_reconcile()
         else:
             await self._sequential_reconcile()
+
+        # 3. v3.2: Exit Management - evaluate open positions for exit conditions
+        await self._manage_exits()
 
     async def _discover_markets(self) -> None:
         """v3.0: Intelligent market discovery with dynamic interval."""
@@ -410,15 +430,68 @@ class StrategyBMarketMaking(BaseStrategy):
         state.last_update = time.time()
         
     def on_order_fill(self, market_id: str, side: str, size: float, price: float):
-        """Update internal position on fill."""
+        """Update internal position on fill with v3.2 exit tracking."""
         current = self._positions.get(market_id, 0.0)
+
+        # Get or create market state
+        if market_id not in self._market_states:
+            self._market_states[market_id] = MarketState(token_id=market_id)
+        state = self._market_states[market_id]
+
         if side.upper() == "BUY":
-            self._positions[market_id] = current + size
-        else:
-            self._positions[market_id] = current - size
-        
+            new_pos = current + size
+            self._positions[market_id] = new_pos
+
+            # v3.2: Track entry price (weighted average) and time
+            if current <= 0:
+                # New position
+                state.entry_price = price
+                state.entry_time = time.time()
+                state.highest_price = price
+                state.lowest_price = price
+            else:
+                # Adding to existing position - weighted average
+                total_cost = (state.entry_price * current) + (price * size)
+                state.entry_price = total_cost / new_pos
+
+            state.position = new_pos
+            state.trades_count += 1
+
+        else:  # SELL
+            new_pos = current - size
+            self._positions[market_id] = new_pos
+
+            # v3.2: Calculate realized PnL on sell
+            if current > 0 and state.entry_price > 0:
+                pnl = (price - state.entry_price) * min(size, current)
+                state.realized_pnl += pnl
+                self._total_pnl += pnl
+                self._total_trades += 1
+
+                self._audit.log_strategy_event(self._name, "TRADE_CLOSED", {
+                    "market": market_id[:16] + "...",
+                    "entry_price": round(state.entry_price, 4),
+                    "exit_price": round(price, 4),
+                    "size": round(size, 2),
+                    "pnl": round(pnl, 4)
+                })
+
+            state.position = new_pos
+
+            # Reset tracking if position closed
+            if new_pos <= 0:
+                state.entry_price = 0.0
+                state.entry_time = 0.0
+                state.highest_price = 0.0
+                state.lowest_price = float('inf')
+                state.unrealized_pnl = 0.0
+                state.unrealized_pnl_pct = 0.0
+
         self._audit.log_strategy_event(self._name, "POSITION_UPDATE", {
-            "market": market_id,
+            "market": market_id[:16] + "...",
+            "side": side,
+            "size": size,
+            "price": price,
             "new_pos": self._positions[market_id]
         })
         
@@ -517,7 +590,168 @@ class StrategyBMarketMaking(BaseStrategy):
         
         self._set_state(StrategyState.INACTIVE, "ABORTED")
         self._audit.log_strategy_event(self._name, "ABORTED")
-    
+
+    # ============= v3.2: Exit Management =============
+
+    async def _manage_exits(self) -> None:
+        """
+        v3.2: Evaluate all open positions for exit conditions.
+        Called after reconciliation in process_tick().
+        """
+        if self._state != StrategyState.ACTIVE:
+            return
+
+        cfg = self._exit_config
+        now = time.time()
+        positions_to_close: List[tuple] = []  # (market_id, reason)
+
+        # Fetch orderbooks concurrently for all positions
+        position_markets = [
+            (mid, state) for mid, state in self._market_states.items()
+            if state.position > 0 and state.entry_price > 0
+        ]
+
+        if not position_markets:
+            return
+
+        # Fetch books in parallel
+        books = await asyncio.gather(*[
+            self._clob_adapter.get_orderbook(mid) for mid, _ in position_markets
+        ], return_exceptions=True)
+
+        for (market_id, state), book in zip(position_markets, books):
+            if isinstance(book, Exception) or not book:
+                continue
+
+            current_price = book.best_bid  # Exit price (we sell at bid)
+            if current_price <= 0:
+                continue
+
+            # Update tracking
+            state.highest_price = max(state.highest_price, current_price)
+            if state.lowest_price == float('inf'):
+                state.lowest_price = current_price
+            else:
+                state.lowest_price = min(state.lowest_price, current_price)
+
+            # Calculate unrealized PnL
+            state.unrealized_pnl = (current_price - state.entry_price) * state.position
+            state.unrealized_pnl_pct = ((current_price / state.entry_price) - 1) * 100 if state.entry_price > 0 else 0
+
+            hold_time = now - state.entry_time if state.entry_time > 0 else 0
+            exit_reason = None
+
+            # Skip if minimum hold time not reached
+            if hold_time < cfg['min_hold_seconds']:
+                continue
+
+            # Check exit conditions in order of priority
+            exit_mode = cfg['exit_mode']
+
+            if exit_mode in ('dynamic', 'hybrid'):
+                # 1. Profit Target
+                if state.unrealized_pnl_pct >= cfg['profit_target_pct']:
+                    exit_reason = f"PROFIT_TARGET ({state.unrealized_pnl_pct:.2f}%)"
+
+                # 2. Stop Loss
+                elif state.unrealized_pnl_pct <= -cfg['stop_loss_pct']:
+                    exit_reason = f"STOP_LOSS ({state.unrealized_pnl_pct:.2f}%)"
+
+                # 3. Trailing Stop (only if we've been in profit)
+                elif state.highest_price > state.entry_price:
+                    # v3.2: Correct trailing stop calculation (relative to high, not entry)
+                    drawdown_from_high = ((state.highest_price - current_price) / state.highest_price) * 100
+                    profit_from_entry = ((state.highest_price - state.entry_price) / state.entry_price) * 100
+
+                    # Dynamic threshold: scales with profit
+                    trail_threshold = max(cfg['trailing_stop_pct'], profit_from_entry * 0.3)
+
+                    # Only trigger if: significant drawdown AND still profitable
+                    if drawdown_from_high >= trail_threshold and current_price > state.entry_price:
+                        exit_reason = f"TRAILING_STOP (drawdown: {drawdown_from_high:.2f}%)"
+
+            # 4. Timeout (applies in all modes)
+            if not exit_reason and hold_time >= cfg['max_hold_seconds']:
+                exit_reason = f"TIMEOUT ({hold_time:.0f}s)"
+
+            if exit_reason:
+                positions_to_close.append((market_id, exit_reason, current_price))
+
+        # Execute exits
+        for market_id, reason, exit_price in positions_to_close:
+            await self._close_position(market_id, reason, exit_price)
+
+    async def _close_position(self, market_id: str, reason: str, exit_price: float) -> bool:
+        """
+        v3.2: Close a position by submitting a market sell order.
+        """
+        state = self._market_states.get(market_id)
+        if not state or state.position <= 0:
+            return False
+
+        position_size = state.position
+        entry_price = state.entry_price
+
+        # Cancel existing GTC orders for this market
+        if state.buy_order_id:
+            self._execution.cancel_order(state.buy_order_id)
+            state.buy_order_id = None
+        if state.sell_order_id:
+            self._execution.cancel_order(state.sell_order_id)
+            state.sell_order_id = None
+
+        # Submit exit order (FOK for immediate fill)
+        order_id = self._execution.submit_order(
+            strategy=self._name,
+            order_type="FOK",
+            params={
+                "token_id": market_id,
+                "price": str(exit_price),
+                "size": str(position_size),
+                "side": "SELL"
+            }
+        )
+
+        if order_id:
+            # Calculate final PnL
+            final_pnl = (exit_price - entry_price) * position_size
+            final_pnl_pct = ((exit_price / entry_price) - 1) * 100 if entry_price > 0 else 0
+            hold_time = time.time() - state.entry_time if state.entry_time > 0 else 0
+
+            # Update stats
+            state.realized_pnl += final_pnl
+            self._total_pnl += final_pnl
+            self._total_trades += 1
+
+            # Log exit
+            self._audit.log_strategy_event(self._name, "POSITION_EXIT", {
+                "market": market_id[:16] + "...",
+                "reason": reason,
+                "entry_price": round(entry_price, 4),
+                "exit_price": round(exit_price, 4),
+                "size": round(position_size, 2),
+                "pnl_usd": round(final_pnl, 4),
+                "pnl_pct": round(final_pnl_pct, 2),
+                "hold_time_s": round(hold_time, 1),
+                "highest_price": round(state.highest_price, 4),
+                "total_pnl": round(self._total_pnl, 4)
+            })
+
+            # Reset state
+            state.position = 0.0
+            state.entry_price = 0.0
+            state.entry_time = 0.0
+            state.highest_price = 0.0
+            state.lowest_price = float('inf')
+            state.unrealized_pnl = 0.0
+            state.unrealized_pnl_pct = 0.0
+            self._positions[market_id] = 0.0
+
+            self._notify_status()
+            return True
+
+        return False
+
     @property
     def live_orderbook_snapshots(self) -> dict[str, dict]:
         """Get live snapshots of all tracked orderbooks (Thread-safe copy)."""

@@ -329,25 +329,34 @@ class StrategyAFrontRunning(BaseStrategy):
 
             exit_reason = None
 
+            # v3.2: Volatility-adjusted exit targets
+            vol_multiplier = 1.0
+            if self._volatility and hasattr(self._volatility, 'get_score'):
+                vol_score = self._volatility.get_score(token_id)
+                vol_multiplier = 1.0 + (vol_score * 0.5)  # Widen targets in volatile markets
+
+            adjusted_profit_target = cfg['profit_target_pct'] * vol_multiplier
+            adjusted_stop_loss = cfg['stop_loss_pct'] * vol_multiplier
+
             if cfg['exit_mode'] in ['dynamic', 'hybrid']:
-                # 1. Check Profit Target
-                if pos.unrealized_pnl_pct >= cfg['profit_target_pct']:
+                # 1. Check Profit Target (v3.2: volatility-adjusted)
+                if pos.unrealized_pnl_pct >= adjusted_profit_target:
                     pos.profit_target_hit = True
-                    exit_reason = f"PROFIT_TARGET ({pos.unrealized_pnl_pct:.2f}%)"
+                    exit_reason = f"PROFIT_TARGET ({pos.unrealized_pnl_pct:.2f}% >= {adjusted_profit_target:.2f}%)"
 
-                # 2. Check Stop Loss
-                elif pos.unrealized_pnl_pct <= -cfg['stop_loss_pct']:
+                # 2. Check Stop Loss (v3.2: volatility-adjusted)
+                elif pos.unrealized_pnl_pct <= -adjusted_stop_loss:
                     pos.stop_loss_hit = True
-                    exit_reason = f"STOP_LOSS ({pos.unrealized_pnl_pct:.2f}%)"
+                    exit_reason = f"STOP_LOSS ({pos.unrealized_pnl_pct:.2f}% <= -{adjusted_stop_loss:.2f}%)"
 
-                # 3. Check Trailing Stop (v3.0: Corrected calculation)
+                # 3. Check Trailing Stop (v3.2: Fixed calculation - relative to HIGH not entry)
                 elif pos.highest_price > pos.entry_price:
                     # Only trail if we've been in profit
                     profit_from_entry = ((pos.highest_price - pos.entry_price) / pos.entry_price) * 100
                     if profit_from_entry > 0:
-                        # Calculate how much we've given back from the peak
-                        drawdown_from_high = ((pos.highest_price - current_price) / pos.entry_price) * 100
-                        # Trail threshold scales with profit: min 0.3%, or trailing_stop_pct of profit
+                        # v3.2 FIX: Calculate drawdown relative to HIGH WATER MARK (not entry!)
+                        drawdown_from_high = ((pos.highest_price - current_price) / pos.highest_price) * 100
+                        # Trail threshold scales with profit: min trailing_stop_pct, or 30% of max profit
                         trail_threshold = max(cfg['trailing_stop_pct'], profit_from_entry * 0.3)
                         if drawdown_from_high >= trail_threshold and current_price > pos.entry_price:
                             pos.trailing_stop_hit = True

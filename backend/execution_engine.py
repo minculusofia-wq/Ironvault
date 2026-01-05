@@ -553,3 +553,85 @@ class ExecutionEngine:
             if key in self._paper_config:
                 self._paper_config[key] = config[key]
         self._audit.log_system_event("PAPER_CONFIG_UPDATED", self._paper_config)
+
+    # ============= v3.2: Enhanced Position Tracking & Callbacks =============
+
+    def get_position_summary(self) -> dict:
+        """Get summary of all open positions for UI/monitoring."""
+        positions_data = []
+        total_unrealized = 0.0
+        total_size = 0.0
+
+        for token_id, positions in self._positions.items():
+            if not positions:
+                continue
+
+            token_size = sum(p.size for p in positions)
+            token_cost = sum(p.size * p.price for p in positions)
+            avg_price = token_cost / token_size if token_size > 0 else 0
+
+            positions_data.append({
+                'token_id': token_id[:16] + "...",
+                'size': round(token_size, 4),
+                'avg_entry_price': round(avg_price, 6),
+                'cost_basis': round(token_cost, 4),
+                'num_entries': len(positions)
+            })
+            total_size += token_size
+
+        return {
+            'total_positions': len([p for p in self._positions.values() if p]),
+            'total_size_usd': round(total_size, 2),
+            'total_realized_pnl': round(self._total_realized_pnl, 4),
+            'positions': positions_data
+        }
+
+    def get_unrealized_pnl_all(self, current_prices: dict) -> dict:
+        """
+        Calculate unrealized PnL for all positions given current prices.
+        current_prices: {token_id: current_price}
+        """
+        result = {
+            'total_unrealized_pnl': 0.0,
+            'by_token': {}
+        }
+
+        for token_id, positions in self._positions.items():
+            if not positions or token_id not in current_prices:
+                continue
+
+            current_price = current_prices[token_id]
+            token_size = sum(p.size for p in positions)
+            token_cost = sum(p.size * p.price for p in positions)
+            current_value = token_size * current_price
+            unrealized_pnl = current_value - token_cost
+
+            result['by_token'][token_id[:16] + "..."] = {
+                'size': round(token_size, 4),
+                'cost_basis': round(token_cost, 4),
+                'current_value': round(current_value, 4),
+                'unrealized_pnl': round(unrealized_pnl, 4),
+                'unrealized_pnl_pct': round((unrealized_pnl / token_cost) * 100, 2) if token_cost > 0 else 0
+            }
+            result['total_unrealized_pnl'] += unrealized_pnl
+
+        result['total_unrealized_pnl'] = round(result['total_unrealized_pnl'], 4)
+        return result
+
+    @property
+    def execution_stats(self) -> dict:
+        """Get execution engine statistics."""
+        completed = sum(1 for o in self._orders.values() if o.status == OrderStatus.COMPLETED)
+        failed = sum(1 for o in self._orders.values() if o.status == OrderStatus.FAILED)
+        cancelled = sum(1 for o in self._orders.values() if o.status == OrderStatus.CANCELLED)
+
+        return {
+            'total_orders': len(self._orders),
+            'pending': self.pending_count,
+            'completed': completed,
+            'failed': failed,
+            'cancelled': cancelled,
+            'success_rate': round((completed / len(self._orders)) * 100, 1) if self._orders else 0,
+            'total_realized_pnl': round(self._total_realized_pnl, 4),
+            'paper_trading': getattr(self, '_paper_trading', False)
+        }
