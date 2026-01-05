@@ -179,24 +179,41 @@ class WebSocketClient:
                     # Non-JSON message (ping/pong text, status messages) - skip silently
                     continue
 
-                event_type = data.get("event_type") or data.get("type")
+                # v3.1: Handle both single objects AND arrays (batch updates)
+                # Polymarket can send: {"type": "book", ...} OR [{"type": "book", ...}, ...]
+                if isinstance(data, list):
+                    events = data
+                elif isinstance(data, dict):
+                    events = [data]
+                else:
+                    continue  # Skip unknown types
 
-                # v3.0: Handle multiple Polymarket event types
-                # Docs: book, price_change, tick_size_change, last_trade_price
-                if event_type in ("book", "price_change"):
-                    # Try multiple field names for token ID
-                    token_id = (data.get("asset_id") or data.get("token_id")
-                               or data.get("market") or data.get("market_id"))
+                for event in events:
+                    if not isinstance(event, dict):
+                        continue
 
-                    if token_id and token_id in self._book_callbacks:
-                        for cb in self._book_callbacks[token_id]:
-                            try:
-                                cb(data)
-                            except Exception as e:
-                                self._audit.log_error("WS_CALLBACK_ERROR", str(e))
+                    self._process_event(event)
         except websockets.exceptions.ConnectionClosed:
             self._audit.log_system_event("WS_CLOSED", "Connection closed")
         except Exception as e:
             self._audit.log_error("WS_LISTEN_ERROR", str(e))
         finally:
             self._ws = None
+
+    def _process_event(self, data: dict):
+        """v3.1: Process a single event from WebSocket."""
+        event_type = data.get("event_type") or data.get("type")
+
+        # v3.0: Handle multiple Polymarket event types
+        # Docs: book, price_change, tick_size_change, last_trade_price
+        if event_type in ("book", "price_change"):
+            # Try multiple field names for token ID
+            token_id = (data.get("asset_id") or data.get("token_id")
+                       or data.get("market") or data.get("market_id"))
+
+            if token_id and token_id in self._book_callbacks:
+                for cb in self._book_callbacks[token_id]:
+                    try:
+                        cb(data)
+                    except Exception as e:
+                        self._audit.log_error("WS_CALLBACK_ERROR", str(e))
