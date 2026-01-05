@@ -1,0 +1,135 @@
+{
+    "capital": {
+        "total": 500.0,
+        "max_allocation_strategy_a": 250.0,
+        "max_allocation_strategy_b": 250.0
+    },
+    "strategy_a": {
+        "enabled": true,
+        "name": "Strategy A - Front-Running ($500 Paper)",
+        "max_events": 12,
+        "min_odds": 1.03,
+        "max_odds": 20.0,
+        "trade_size_percent": 5.0,
+        "exit_config": {
+            "exit_mode": "dynamic",
+            "profit_target_pct": 1.6,
+            "stop_loss_pct": 0.8,
+            "trailing_stop_pct": 0.4,
+            "max_hold_seconds": 90,
+            "min_hold_seconds": 5
+        },
+        "trigger_cooldown_seconds": 5.0,
+        "orderbook_cache_ttl_ms": 150
+    },
+    "strategy_b": {
+        "enabled": true,
+        "name": "Strategy B - Market Making ($500 Paper)",
+        "spread_min": 0.006,
+        "spread_max": 0.10,
+        "max_exposure": 250.0,
+        "trade_size_percent": 6.0,
+        "spread_config": {
+            "base_spread": 0.016,
+            "min_spread": 0.005,
+            "max_spread": 0.10,
+            "volatility_multiplier": 1.6,
+            "inventory_skew_max": 0.006,
+            "imbalance_factor": 0.0018,
+            "reprice_threshold": 0.003
+        },
+        "market_config": {
+            "max_markets": 35,
+            "discovery_interval": 20,
+            "min_volume_24h": 800,
+            "min_spread_opportunity": 0.006,
+            "parallel_reconcile": true
+        },
+        "exit_config": {
+            "profit_target_pct": 1.4,
+            "stop_loss_pct": 0.9,
+            "trailing_stop_pct": 0.45,
+            "max_hold_seconds": 240,
+            "min_hold_seconds": 8,
+            "exit_mode": "dynamic"
+        }
+    },
+    "risk": {
+        "max_drawdown_percent": 8.0,
+        "max_daily_loss": 40.0,
+        "kill_switch_threshold": 12.0
+    },
+    "market": {
+        "connection_timeout_seconds": 15,
+        "heartbeat_interval_seconds": 1.2,
+        "clob_api_url": "https://clob.polymarket.com/",
+        "gamma_api_url": "https://gamma-api.polymarket.com/",
+        "paper_trading": true
+    },
+    "paper_trading": {
+        "enabled": true,
+        "realistic_mode": true,
+        "slippage_base": 0.0008,
+        "slippage_min": 0.0003,
+        "slippage_max": 0.008,
+        "slippage_size_factor": 0.001,
+        "fill_probability": 0.92,
+        "latency_min_ms": 25,
+        "latency_max_ms": 120,
+        "partial_fill_chance": 0.10,
+        "depth_impact_factor": 0.0006
+    },
+    "analytics": {
+        "enabled": true,
+        "equity_curve_points": 200,
+        "recent_trades_limit": 100,
+        "rolling_sharpe_window": 60,
+        "track_per_strategy": true
+    },
+    "market_scanner": {
+        "enabled": true,
+        "scan_interval_seconds": 20,
+        "batch_size": 20,
+        "batch_delay_ms": 35,
+        "weights": {
+            "volume": 0.30,
+            "spread": 0.25,
+            "depth": 0.20,
+            "activity": 0.15,
+            "time_to_resolution": 0.10
+        },
+        "thresholds": {
+            "min_volume_24h": 800,
+            "min_spread_for_mm": 0.006,
+            "max_spread_for_mm": 0.25,
+            "min_depth_usd": 80,
+            "min_score_for_trading": 0.25
+        }
+    },
+    "data_feeds": {
+        "polymarket_monitor": {
+            "enabled": true,
+            "poll_interval": 0.35,
+            "batch_size": 20,
+            "thresholds": {
+                "price_spike_pct": 1.6,
+                "price_spike_window_sec": 25,
+                "volume_spike_std": 1.8,
+                "imbalance_threshold": 0.55,
+                "spread_compression_pct": 35,
+                "min_confidence": 0.40
+            }
+        }
+    },
+    "rate_limiter": {
+        "max_tokens": 80,
+        "refill_rate": 40
+    },
+    "logging": {
+        "level": "INFO",
+        "trade_details": true,
+        "pnl_updates": true,
+        "opportunity_alerts": true,
+        "performance_metrics": true
+    }
+}

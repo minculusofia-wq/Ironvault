@@ -1,0 +1,122 @@
+{
+    "capital": {
+        "total": 100.0,
+        "max_allocation_strategy_a": 50.0,
+        "max_allocation_strategy_b": 50.0
+    },
+    "strategy_a": {
+        "enabled": true,
+        "name": "Strategy A - Front-Running ($100)",
+        "max_events": 5,
+        "min_odds": 1.05,
+        "max_odds": 15.0,
+        "trade_size_percent": 8.0,
+        "exit_config": {
+            "exit_mode": "dynamic",
+            "profit_target_pct": 2.0,
+            "stop_loss_pct": 1.0,
+            "trailing_stop_pct": 0.5,
+            "max_hold_seconds": 90,
+            "min_hold_seconds": 5
+        },
+        "trigger_cooldown_seconds": 8.0,
+        "orderbook_cache_ttl_ms": 200
+    },
+    "strategy_b": {
+        "enabled": true,
+        "name": "Strategy B - Market Making ($100)",
+        "spread_min": 0.01,
+        "spread_max": 0.12,
+        "max_exposure": 50.0,
+        "trade_size_percent": 10.0,
+        "spread_config": {
+            "base_spread": 0.02,
+            "min_spread": 0.008,
+            "max_spread": 0.12,
+            "volatility_multiplier": 1.8,
+            "inventory_skew_max": 0.008,
+            "imbalance_factor": 0.002,
+            "reprice_threshold": 0.005
+        },
+        "market_config": {
+            "max_markets": 15,
+            "discovery_interval": 30,
+            "min_volume_24h": 500,
+            "min_spread_opportunity": 0.01,
+            "parallel_reconcile": true
+        },
+        "exit_config": {
+            "profit_target_pct": 1.5,
+            "stop_loss_pct": 1.0,
+            "trailing_stop_pct": 0.5,
+            "max_hold_seconds": 300,
+            "min_hold_seconds": 10,
+            "exit_mode": "dynamic"
+        }
+    },
+    "risk": {
+        "max_drawdown_percent": 10.0,
+        "max_daily_loss": 10.0,
+        "kill_switch_threshold": 15.0
+    },
+    "market": {
+        "connection_timeout_seconds": 20,
+        "heartbeat_interval_seconds": 2,
+        "clob_api_url": "https://clob.polymarket.com/",
+        "gamma_api_url": "https://gamma-api.polymarket.com/",
+        "paper_trading": false
+    },
+    "analytics": {
+        "enabled": true,
+        "equity_curve_points": 100,
+        "recent_trades_limit": 50,
+        "rolling_sharpe_window": 30,
+        "track_per_strategy": true
+    },
+    "market_scanner": {
+        "enabled": true,
+        "scan_interval_seconds": 30,
+        "batch_size": 10,
+        "batch_delay_ms": 50,
+        "weights": {
+            "volume": 0.30,
+            "spread": 0.25,
+            "depth": 0.20,
+            "activity": 0.15,
+            "time_to_resolution": 0.10
+        },
+        "thresholds": {
+            "min_volume_24h": 500,
+            "min_spread_for_mm": 0.01,
+            "max_spread_for_mm": 0.25,
+            "min_depth_usd": 50,
+            "min_score_for_trading": 0.25
+        }
+    },
+    "data_feeds": {
+        "polymarket_monitor": {
+            "enabled": true,
+            "poll_interval": 0.5,
+            "batch_size": 10,
+            "thresholds": {
+                "price_spike_pct": 2.0,
+                "price_spike_window_sec": 30,
+                "volume_spike_std": 2.0,
+                "imbalance_threshold": 0.6,
+                "spread_compression_pct": 40,
+                "min_confidence": 0.4
+            }
+        }
+    },
+    "rate_limiter": {
+        "max_tokens": 50,
+        "refill_rate": 25
+    },
+    "logging": {
+        "level": "INFO",
+        "trade_details": true,
+        "pnl_updates": true,
+        "opportunity_alerts": true,
+        "performance_metrics": true
+    }
+}
