@@ -346,7 +346,7 @@ class Orchestrator:
                     side=p.get('side', 'unknown'),
                     price=float(p.get('price', 0)),
                     size=float(p.get('size', 0)),
-                    pnl=0.0, # PnL calculation would happen on settlement or sell
+                    pnl=float(result.get('pnl', 0.0)),  # v3.2: Extract PnL from result
                     timestamp=result.get('timestamp', time.time()),
                     details=json.dumps(result)
                 )
