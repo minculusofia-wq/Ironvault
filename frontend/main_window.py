@@ -13,6 +13,8 @@ from PySide6.QtCore import Slot, QTimer
 from .dashboard import Dashboard
 from .controls import ControlPanel
 from .credentials_dialog import CreateVaultDialog, UnlockVaultDialog
+from .config_builder import ConfigBuilderTab
+from .auto_optimizer_tab import AutoOptimizerTab
 from .styles import MAIN_STYLESHEET
 from backend.orchestrator import Orchestrator, BotState
 
@@ -50,11 +52,19 @@ class MainWindow(QMainWindow):
         
         # TAB 1: DASHBOARD
         self._dashboard = Dashboard()
-        self._tabs.addTab(self._dashboard, "📊 TABLEAU DE BORD")
-        
+        self._tabs.addTab(self._dashboard, "TABLEAU DE BORD")
+
         # TAB 2: SETTINGS & SECURITY
         self._controls = ControlPanel()
-        self._tabs.addTab(self._controls, "⚙️ PARAMÈTRES & SÉCURITÉ")
+        self._tabs.addTab(self._controls, "PARAMETRES")
+
+        # TAB 3: CONFIG BUILDER (v3.3)
+        self._config_builder = ConfigBuilderTab()
+        self._tabs.addTab(self._config_builder, "CONFIG BUILDER")
+
+        # TAB 4: AUTO-OPTIMIZER (v3.3)
+        self._optimizer_tab = AutoOptimizerTab(self._orchestrator)
+        self._tabs.addTab(self._optimizer_tab, "OPTIMIZER")
         
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
@@ -88,8 +98,22 @@ class MainWindow(QMainWindow):
         self._controls.resume_requested.connect(self._on_resume)
         self._controls.emergency_stop_requested.connect(self._on_emergency_stop)
         self._controls.safe_shutdown_requested.connect(self._handle_safe_shutdown)
-        
+
+        # v3.3: Config Builder signals
+        self._config_builder.config_saved.connect(self._on_load_config)
+
+        # v3.3: Optimizer signals
+        self._optimizer_tab.config_optimized.connect(self._on_config_optimized)
+
         self._orchestrator.subscribe_state(self._on_bot_state_changed)
+
+    @Slot(dict)
+    def _on_config_optimized(self, optimized_config: dict):
+        """Handle optimized config from optimizer tab."""
+        self._status_bar.showMessage(
+            f"Config optimisee pour ${optimized_config.get('capital', {}).get('total', 0):.0f} - "
+            f"Tier: {optimized_config.get('tier', 'unknown').upper()}"
+        )
     
     def _start_update_timer(self):
         """Start periodic UI update timer."""
