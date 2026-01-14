@@ -498,7 +498,7 @@ class ConfigBuilderTab(QWidget):
         self.preview_text = QTextEdit()
         self.preview_text.setReadOnly(True)
         self.preview_text.setMaximumHeight(150)
-        self.preview_text.setStyleSheet(f"background-color: {COLORS['bg_dark']}; font-family: monospace;")
+        self.preview_text.setStyleSheet(f"background-color: {COLORS['surface']}; font-family: monospace;")
         preview_layout.addWidget(self.preview_text)
 
         # Validation label

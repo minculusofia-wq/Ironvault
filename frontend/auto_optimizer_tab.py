@@ -176,7 +176,7 @@ class KellySection(QGroupBox):
 
         # Stats display
         stats_frame = QFrame()
-        stats_frame.setStyleSheet(f"background-color: {COLORS['bg_dark']}; border-radius: 5px; padding: 10px;")
+        stats_frame.setStyleSheet(f"background-color: {COLORS['surface']}; border-radius: 5px; padding: 10px;")
         stats_layout = QGridLayout(stats_frame)
 
         stats_layout.addWidget(QLabel("Strategy A:"), 0, 0)
@@ -249,7 +249,7 @@ class SuggestionsSection(QGroupBox):
 
         self.list_widget = QListWidget()
         self.list_widget.setMaximumHeight(150)
-        self.list_widget.setStyleSheet(f"background-color: {COLORS['bg_dark']};")
+        self.list_widget.setStyleSheet(f"background-color: {COLORS['surface']};")
         layout.addWidget(self.list_widget)
 
         # Buttons
@@ -315,7 +315,7 @@ class HistorySection(QGroupBox):
         self.history_text = QTextEdit()
         self.history_text.setReadOnly(True)
         self.history_text.setMaximumHeight(120)
-        self.history_text.setStyleSheet(f"background-color: {COLORS['bg_dark']}; font-family: monospace;")
+        self.history_text.setStyleSheet(f"background-color: {COLORS['surface']}; font-family: monospace;")
         layout.addWidget(self.history_text)
 
     def add_entry(self, param: str, old_val, new_val, reason: str = ""):
